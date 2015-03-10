@@ -5,7 +5,7 @@ set -e
 readonly VM_NAME=minecraft
 readonly VM_SIZE=2gb
 readonly SSH_OPTS=(
-    -i "/home/.docker/machine/machines/${VM_NAME}/id_rsa"
+    -i "${HOME}/.docker/machine/machines/${VM_NAME}/id_rsa"
     -o IdentitiesOnly=yes
     -o StrictHostKeyChecking=no
     -o UserKnownHostsFile=/dev/null
