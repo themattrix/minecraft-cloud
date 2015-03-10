@@ -92,6 +92,6 @@ elif [ "$1" == "execute" ]; then
     shift
     (cd minecraft-fig; while_connected "$@")
 else
-    echo "Usage: $0 (run|overviewer|execute)"
+    echo "Usage: $0 (up|rm|overviewer|execute)"
     exit 1
 fi
