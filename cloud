@@ -1,0 +1,97 @@
+#!/bin/bash
+
+set -e
+
+readonly VM_NAME=minecraft
+readonly VM_SIZE=2gb
+readonly SSH_OPTS=(
+    -i "/home/.docker/machine/machines/${VM_NAME}/id_rsa"
+    -o IdentitiesOnly=yes
+    -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile=/dev/null
+    -o LogLevel=quiet
+)
+
+
+function create_vm() {(
+    source digitalocean.auth
+    docker-machine create \
+        --driver digitalocean \
+        --digitalocean-size "${VM_SIZE}" \
+        "${VM_NAME}"
+)}
+
+function delete_vm() {
+    docker-machine rm "${VM_NAME}"
+}
+
+function ensure_vm() {
+    if ! docker-machine inspect "${VM_NAME}" &> /dev/null; then
+        create_vm
+    fi
+}
+
+function while_connected() {(
+    $(docker-machine env "${VM_NAME}")
+    "$@"
+)}
+
+function forward_ports() {
+    local ip=$(docker-machine ip "${VM_NAME}")
+
+    ssh "${SSH_OPTS[@]}" \
+        -L *:25565:localhost:25565 \
+        -L *:25566:localhost:25566 \
+        -N \
+        "root@${ip}"
+}
+
+function restore_data() {
+    local ip=$(docker-machine ip "${VM_NAME}")
+    local remote_dir="${PWD}/minecraft-fig"
+
+    mkdir -p minecraft-fig/volumes/game/{settings,world}
+
+    ssh "${SSH_OPTS[@]}" "root@${ip}" "mkdir -p '${remote_dir}'"
+
+    tar -C minecraft-fig -c volumes \
+    | ssh "${SSH_OPTS[@]}" "root@${ip}" "tar -C '${remote_dir}' -x"
+}
+
+function backup_data() {(
+    local ip=$(docker-machine ip "${VM_NAME}")
+    local remote_dir="${PWD}/minecraft-fig"
+
+    cd minecraft-fig
+    mv volumes volumes.bak
+    ssh "${SSH_OPTS[@]}" "root@${ip}" "tar -C '${remote_dir}' -c volumes" | tar -x
+    rm -rf volumes.bak
+)}
+
+function up() {(
+    cd minecraft-fig
+    while_connected docker-compose up "${@}"
+)}
+
+if [ "$1" == "up" ]; then
+    echo -e "\n>>> creating vm..."
+    ensure_vm
+    echo -e "\n>>> restoring data..."
+    restore_data
+    up -d map game
+    echo -e "\n>>> ready"
+    forward_ports
+elif [ "$1" == "rm" ]; then
+    echo -e "\n>>> backing up data..."
+    backup_data
+    echo -e "\n>>> deleting vm..."
+    delete_vm
+elif [ "$1" == "overviewer" ]; then
+    up overviewer
+elif [ "$1" == "execute" ]; then
+    shift
+    (cd minecraft-fig; while_connected "$@")
+else
+    echo "Usage: $0 (run|overviewer|execute)"
+    exit 1
+fi

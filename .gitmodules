@@ -1,0 +1,3 @@
+[submodule "minecraft-fig"]
+	path = minecraft-fig
+	url = git@github.com:themattrix/minecraft-fig.git
