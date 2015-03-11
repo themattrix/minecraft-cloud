@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -e
+set -o pipefail
 
 readonly VM_NAME=minecraft
 readonly VM_SIZE=2gb
@@ -32,6 +33,7 @@ function ensure_vm() {
 }
 
 function while_connected() {(
+    cd minecraft-fig
     $(docker-machine env "${VM_NAME}")
     "$@"
 )}
@@ -40,9 +42,11 @@ function forward_ports() {
     local ip=$(docker-machine ip "${VM_NAME}")
 
     ssh "${SSH_OPTS[@]}" \
+        -o ExitOnForwardFailure=yes \
         -L *:25565:localhost:25565 \
         -L *:25566:localhost:25566 \
         -N \
+        -f \
         "root@${ip}"
 }
 
@@ -55,7 +59,7 @@ function restore_data() {
     ssh "${SSH_OPTS[@]}" "root@${ip}" "mkdir -p '${remote_dir}'"
 
     tar -C minecraft-fig -c volumes \
-    | ssh "${SSH_OPTS[@]}" "root@${ip}" "tar -C '${remote_dir}' -x"
+    | ssh "${SSH_OPTS[@]}" "root@${ip}" "tar -C '${remote_dir}' --no-same-owner -x"
 }
 
 function backup_data() {(
@@ -64,34 +68,41 @@ function backup_data() {(
 
     cd minecraft-fig
     mv volumes volumes.bak
-    ssh "${SSH_OPTS[@]}" "root@${ip}" "tar -C '${remote_dir}' -c volumes" | tar -x
+    ssh "${SSH_OPTS[@]}" "root@${ip}" "tar -C '${remote_dir}' -c volumes" | tar --no-same-owner -x
     rm -rf volumes.bak
 )}
 
-function up() {(
-    cd minecraft-fig
+function compose_up() {
     while_connected docker-compose up "${@}"
-)}
+}
+
+function compose_restart() {
+    while_connected docker-compose restart "${@}"
+}
 
 if [ "$1" == "up" ]; then
     echo -e "\n>>> creating vm..."
     ensure_vm
-    echo -e "\n>>> restoring data..."
-    restore_data
-    up -d map game
+    restore_data &
+    compose_up -d map game
+    wait
     echo -e "\n>>> ready"
     forward_ports
+elif [ "$1" == "restart" ]; then
+    compose_restart "$@"
 elif [ "$1" == "rm" ]; then
+    echo -e "\n>>> stopping services..."
+    while_connected docker-compose stop
     echo -e "\n>>> backing up data..."
     backup_data
     echo -e "\n>>> deleting vm..."
     delete_vm
 elif [ "$1" == "overviewer" ]; then
-    up overviewer
+    compose_up overviewer
 elif [ "$1" == "execute" ]; then
     shift
-    (cd minecraft-fig; while_connected "$@")
+    while_connected "$@"
 else
-    echo "Usage: $0 (up|rm|overviewer|execute)"
+    echo "Usage: $0 (up|restart|rm|overviewer|execute)"
     exit 1
 fi
