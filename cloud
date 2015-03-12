@@ -4,7 +4,6 @@ set -e
 set -o pipefail
 
 readonly VM_NAME=minecraft
-readonly VM_SIZE=2gb
 readonly SSH_OPTS=(
     -i "${HOME}/.docker/machine/machines/${VM_NAME}/id_rsa"
     -o IdentitiesOnly=yes
@@ -14,10 +13,15 @@ readonly SSH_OPTS=(
 )
 
 function create_vm() {(
-    source digitalocean.auth
+    local driver=${1-digitalocean}
+
+    echo -e "\n>>> creating vm on ${driver}..."
+
+    source "${driver}.auth"
+    source "${driver}.spec"
+
     docker-machine create \
-        --driver digitalocean \
-        --digitalocean-size "${VM_SIZE}" \
+        --driver "${driver}" \
         "${VM_NAME}"
 )}
 
@@ -74,13 +78,13 @@ function compose_restart() {
 }
 
 if [ "$1" == "up" ]; then
-    echo -e "\n>>> creating vm..."
-    create_vm
+    shift
+    create_vm "$@"
     restore_data &
     compose_up -d map game
     wait
-    echo -e "\n>>> ready"
     forward_ports
+    echo -e "\n>>> ready"
 elif [ "$1" == "restart" ]; then
     compose_restart "$@"
 elif [ "$1" == "rm" ]; then
@@ -92,10 +96,13 @@ elif [ "$1" == "rm" ]; then
     delete_vm
 elif [ "$1" == "map" ]; then
     compose_up mapcrafter
+elif [ "$1" == "compose" ]; then
+    shift
+    while_connected docker-compose "$@"
 elif [ "$1" == "execute" ]; then
     shift
     while_connected "$@"
 else
-    echo "Usage: $0 (up|restart|rm|map|execute)"
+    echo "Usage: $0 (up [driver]|restart|rm|map|compose [args...]|execute [args...])"
     exit 1
 fi

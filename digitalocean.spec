@@ -1,0 +1,1 @@
+export DIGITALOCEAN_SIZE=2gb
