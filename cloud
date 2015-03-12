@@ -83,7 +83,6 @@ if [ "$1" == "up" ]; then
     restore_data &
     compose_up -d map game
     wait
-    forward_ports
     echo -e "\n>>> ready"
 elif [ "$1" == "restart" ]; then
     compose_restart "$@"
@@ -94,6 +93,8 @@ elif [ "$1" == "rm" ]; then
     backup_data
     echo -e "\n>>> deleting vm..."
     delete_vm
+elif [ "$1" == "forward" ]; then
+    forward_ports
 elif [ "$1" == "map" ]; then
     compose_up mapcrafter
 elif [ "$1" == "compose" ]; then
@@ -103,6 +104,6 @@ elif [ "$1" == "execute" ]; then
     shift
     while_connected "$@"
 else
-    echo "Usage: $0 (up [driver]|restart|rm|map|compose [args...]|execute [args...])"
+    echo "Usage: $0 (up [driver]|restart|rm|forward|map|compose [args...]|execute [args...])"
     exit 1
 fi
