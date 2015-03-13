@@ -1,0 +1,26 @@
+#!/bin/bash
+
+set -e
+set -o pipefail
+
+function load_spec() {
+    source backup_world_bup.spec
+}
+
+function ensure_repo() {
+    if [ ! -d "${BUP_DIR}" ]; then
+        bup init
+    fi
+}
+
+function do_backup() {(
+    local in_dir=$1
+    shift
+    cd "${in_dir}"
+    bup index "$@"
+    bup save -${BUP_COMPRESSION-6} --name="minecraft" "$@"
+)}
+
+load_spec
+ensure_repo
+do_backup "$@"

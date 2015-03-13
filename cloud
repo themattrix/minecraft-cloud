@@ -3,7 +3,10 @@
 set -e
 set -o pipefail
 
+readonly MY_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly VM_NAME=minecraft
+readonly RUN_LOCAL_BACKUP_IN="minecraft-fig"
+readonly RUN_LOCAL_BACKUP_ON=("volumes")
 readonly SSH_OPTS=(
     -i "${HOME}/.docker/machine/machines/${VM_NAME}/id_rsa"
     -o IdentitiesOnly=yes
@@ -11,6 +14,11 @@ readonly SSH_OPTS=(
     -o UserKnownHostsFile=/dev/null
     -o LogLevel=quiet
 )
+
+
+function print_ip() {
+    docker-machine ip "${VM_NAME}"
+}
 
 function create_vm() {(
     local driver=${1-digitalocean}
@@ -26,6 +34,7 @@ function create_vm() {(
 )}
 
 function delete_vm() {
+    echo -e "\n>>> deleting vm..."
     docker-machine rm "${VM_NAME}"
 }
 
@@ -35,20 +44,8 @@ function while_connected() {(
     "$@"
 )}
 
-function forward_ports() {
-    local ip=$(docker-machine ip "${VM_NAME}")
-
-    ssh "${SSH_OPTS[@]}" \
-        -o ExitOnForwardFailure=yes \
-        -L *:25565:localhost:25565 \
-        -L *:25566:localhost:25566 \
-        -N \
-        -f \
-        "root@${ip}"
-}
-
-function restore_data() {
-    local ip=$(docker-machine ip "${VM_NAME}")
+function restore_data_to_vm() {
+    local ip=$(print_ip)
     local remote_dir="${PWD}/minecraft-fig"
 
     mkdir -p minecraft-fig/volumes/game/{settings,world}
@@ -59,9 +56,11 @@ function restore_data() {
     | ssh "${SSH_OPTS[@]}" "root@${ip}" "tar -C '${remote_dir}' --no-same-owner -x"
 }
 
-function backup_data() {(
-    local ip=$(docker-machine ip "${VM_NAME}")
+function backup_data_from_vm() {(
+    local ip=$(print_ip)
     local remote_dir="${PWD}/minecraft-fig"
+
+    echo -e "\n>>> backing up data from vm..."
 
     cd minecraft-fig
     mv volumes volumes.bak
@@ -73,37 +72,46 @@ function compose_up() {
     while_connected docker-compose up "${@}"
 }
 
-function compose_restart() {
-    while_connected docker-compose restart "${@}"
+function stop_services() {
+    echo -e "\n>>> stopping services..."
+    while_connected docker-compose stop
 }
+
+function backup_local_data() {
+    for backup_script in backup_world_*; do
+        if [ -x "${backup_script}" ]; then
+            echo -e "\n>>> backing up local data with '${backup_script}'..."
+            "./${backup_script}" "${RUN_LOCAL_BACKUP_IN}" "${RUN_LOCAL_BACKUP_ON[@]}"
+        fi
+    done
+}
+
+
+cd "${MY_DIR}"
 
 if [ "$1" == "up" ]; then
     shift
     create_vm "$@"
-    restore_data &
+    restore_data_to_vm &
     compose_up -d map game
     wait
-    echo -e "\n>>> ready"
-elif [ "$1" == "restart" ]; then
-    compose_restart "$@"
+    echo -e "\n>>> up: $(print_ip)"
 elif [ "$1" == "rm" ]; then
-    echo -e "\n>>> stopping services..."
-    while_connected docker-compose stop
-    echo -e "\n>>> backing up data..."
-    backup_data
-    echo -e "\n>>> deleting vm..."
+    stop_services
+    backup_data_from_vm
     delete_vm
-elif [ "$1" == "forward" ]; then
-    forward_ports
+    backup_local_data
 elif [ "$1" == "map" ]; then
     compose_up mapcrafter
 elif [ "$1" == "compose" ]; then
     shift
     while_connected docker-compose "$@"
-elif [ "$1" == "execute" ]; then
+elif [ "$1" == "docker" ]; then
     shift
-    while_connected "$@"
+    while_connected docker "$@"
+elif [ "$1" == "backup" ]; then
+    backup_local_data
 else
-    echo "Usage: $0 (up [driver]|restart|rm|forward|map|compose [args...]|execute [args...])"
+    echo "Usage: $0 (up [driver]|map|compose [args...]|docker [args...]|rm|backup)"
     exit 1
 fi
