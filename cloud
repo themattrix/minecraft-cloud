@@ -52,7 +52,7 @@ function restore_data_to_vm() {
 
     ssh "${SSH_OPTS[@]}" "root@${ip}" "mkdir -p '${remote_dir}'"
 
-    tar -C minecraft-fig -c volumes \
+    tar --exclude='*.lock' -C minecraft-fig -c volumes \
     | ssh "${SSH_OPTS[@]}" "root@${ip}" "tar -C '${remote_dir}' --no-same-owner -x"
 }
 
@@ -64,7 +64,8 @@ function backup_data_from_vm() {(
 
     cd minecraft-fig
     mv volumes volumes.bak
-    ssh "${SSH_OPTS[@]}" "root@${ip}" "tar -C '${remote_dir}' -c volumes" | tar --no-same-owner -x
+    ssh "${SSH_OPTS[@]}" "root@${ip}" "tar --exclude='*.lock' -C '${remote_dir}' -c volumes" \
+    | tar --no-same-owner -x
     rm -rf volumes.bak
 )}
 
