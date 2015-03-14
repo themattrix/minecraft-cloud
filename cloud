@@ -69,6 +69,10 @@ function backup_data_from_vm() {(
     rm -rf volumes.bak
 )}
 
+function compose_build() {
+    while_connected docker-compose build "${@}"
+}
+
 function compose_up() {
     while_connected docker-compose up "${@}"
 }
@@ -94,8 +98,9 @@ if [ "$1" == "up" ]; then
     shift
     create_vm "$@"
     restore_data_to_vm &
-    compose_up -d map game
+    compose_build
     wait
+    compose_up -d
     echo -e "\n>>> up: $(print_ip)"
 elif [ "$1" == "rm" ]; then
     stop_services
