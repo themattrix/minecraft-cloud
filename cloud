@@ -91,9 +91,12 @@ function backup_local_data() {
     done
 }
 
+function game_container() {
+    while_connected docker-compose ps -q game
+}
+
 function mark2() {
-    local container=$(while_connected docker-compose ps -q game)
-    while_connected docker exec -it "${container}" mark2 "$@"
+    while_connected docker exec -it "$(game_container)" mark2 "$@"
 }
 
 
@@ -108,7 +111,9 @@ if [ "$1" == "up" ]; then
     compose_up -d
     echo -e "\n>>> up: $(print_ip)"
 elif [ "$1" == "rm" ]; then
-    mark2 stop
+    if while_connected docker-compose ps game | grep -sq Up; then
+        mark2 stop
+    fi
     stop_services
     backup_data_from_vm
     delete_vm
