@@ -91,6 +91,11 @@ function backup_local_data() {
     done
 }
 
+function mark2() {
+    local container=$(while_connected docker-compose ps -q game)
+    while_connected docker exec -it "${container}" mark2 "$@"
+}
+
 
 cd "${MY_DIR}"
 
@@ -103,10 +108,13 @@ if [ "$1" == "up" ]; then
     compose_up -d
     echo -e "\n>>> up: $(print_ip)"
 elif [ "$1" == "rm" ]; then
+    mark2 stop
     stop_services
     backup_data_from_vm
     delete_vm
     backup_local_data
+elif [ "$1" == "admin" ]; then
+    mark2 attach
 elif [ "$1" == "map" ]; then
     compose_up mapcrafter
 elif [ "$1" == "compose" ]; then
@@ -118,6 +126,6 @@ elif [ "$1" == "docker" ]; then
 elif [ "$1" == "backup" ]; then
     backup_local_data
 else
-    echo "Usage: $0 (up [driver]|map|compose [args...]|docker [args...]|rm|backup)"
+    echo "Usage: $0 (up [driver]|map|admin|compose [args...]|docker [args...]|rm|backup)"
     exit 1
 fi
