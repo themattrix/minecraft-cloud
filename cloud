@@ -1,7 +1,17 @@
 #!/bin/bash
 
+
+#
+# Bash settings
+#
+
 set -e
 set -o pipefail
+
+
+#
+# Constants
+#
 
 readonly MY_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly VM_NAME=minecraft
@@ -15,6 +25,10 @@ readonly SSH_OPTS=(
     -o LogLevel=quiet
 )
 
+
+#
+# VM interaction functions
+#
 
 function print_ip() {
     docker-machine ip "${VM_NAME}"
@@ -74,7 +88,6 @@ function restart_remote_docker_daemon() {
 function restore_data_to_vm() {
     local remote_dir="${PWD}/minecraft-fig"
 
-    mkdir -p minecraft-fig/volumes/game/world
     while_sshed "mkdir -p '${remote_dir}'"
 
     tar --exclude='*.lock' -C minecraft-fig -c volumes \
@@ -83,15 +96,27 @@ function restore_data_to_vm() {
 
 function backup_data_from_vm() {(
     local ip=$(print_ip)
-    local remote_dir="${PWD}/minecraft-fig"
+    local game_volumes="minecraft-fig/volumes/game"
+    local remote_dir="${PWD}/${game_volumes}"
+
+    function update_from_vm() {
+        local subdir=$1
+        while_sshed "tar --exclude='*.lock' -C '${remote_dir}' -c '${subdir}'" \
+        | tar --no-same-owner -x
+    }
 
     echo -e "\n>>> backing up data from vm..."
 
-    cd minecraft-fig
-    mv volumes volumes.bak
-    while_sshed "tar --exclude='*.lock' -C '${remote_dir}' -c volumes" \
-    | tar --no-same-owner -x
-    rm -rf volumes.bak
+    cd "${game_volumes}"
+
+    # Completely replace existing world data
+    with_dir_moved "world" update_from_vm "world"
+    
+    # Update custom settings
+    update_from_vm "settings-custom"
+
+    # Update spigot
+    update_from_vm "spigot"
 )}
 
 function compose_build() {
@@ -129,11 +154,33 @@ function backup_local_data() {
     done
 }
 
+
+#
+# Generic Utilities
+#
+
+function with_dir_moved() {
+    local dir=$1
+    shift
+    mv "${dir}" "${dir}.bak"
+    "$@"
+    rm -rf "${dir}.bak" 
+}
+
+
+#
+# Entrypoint
+#
+
 function main() {
     cd "${MY_DIR}"
 
     if [ "$1" == "up" ]; then
         shift
+        if [ "$1" == "--build-spigot" ]; then
+            shift
+            find "minecraft-fig" -type f -name "spigot.jar" -exec rm -v {} +
+        fi
         create_vm "$@"
         enable_swap
         restore_data_to_vm &
@@ -164,12 +211,11 @@ function main() {
         shift
         while_connected docker "$@"
     else
-        echo "Usage....... $0 (up [driver]|map|admin|rm [--no-preserve])"
-        echo "Debugging... $0 (compose [args...]|docker [args...])"
+        echo "Usage...... $0 (up [--build-spigot] [driver]|map|admin|rm [--no-preserve])"
+        echo "Advanced... $0 (compose [args...]|docker [args...])"
         exit 1
     fi
 }
-
 
 if [ "${BASH_SOURCE[0]}" == "${0}" ]; then
     main "$@"
