@@ -33,6 +33,24 @@ function create_vm() {(
         "${VM_NAME}"
 )}
 
+function enable_swap() {
+    echo -en "\n>>> enabling swapfile..."
+
+    local cmd=""
+    cmd+='if [ $(swapon -s | wc -l) -eq 1 ]; then '
+    cmd+="echo"
+    cmd+="&& fallocate -l 2G /swapfile"
+    cmd+="&& chmod 600 /swapfile"
+    cmd+="&& mkswap /swapfile"
+    cmd+="&& swapon /swapfile"
+    cmd+="&& sysctl vm.swappiness=0"
+    cmd+="; else "
+    cmd+="echo done"
+    cmd+="; fi"
+
+    while_sshed "(${cmd})"
+}
+
 function delete_vm() {
     echo -e "\n>>> deleting vm..."
     docker-machine rm "${VM_NAME}"
@@ -44,16 +62,23 @@ function while_connected() {(
     "$@"
 )}
 
-function restore_data_to_vm() {
+function while_sshed() {
     local ip=$(print_ip)
+    ssh "${SSH_OPTS[@]}" "root@${ip}" "$@"
+}
+
+function restart_remote_docker_daemon() {
+    while_sshed "service docker restart"
+}
+
+function restore_data_to_vm() {
     local remote_dir="${PWD}/minecraft-fig"
 
-    mkdir -p minecraft-fig/volumes/game/{settings,world}
-
-    ssh "${SSH_OPTS[@]}" "root@${ip}" "mkdir -p '${remote_dir}'"
+    mkdir -p minecraft-fig/volumes/game/world
+    while_sshed "mkdir -p '${remote_dir}'"
 
     tar --exclude='*.lock' -C minecraft-fig -c volumes \
-    | ssh "${SSH_OPTS[@]}" "root@${ip}" "tar -C '${remote_dir}' --no-same-owner -x"
+    | while_sshed "tar -C '${remote_dir}' --no-same-owner -x"
 }
 
 function backup_data_from_vm() {(
@@ -64,7 +89,7 @@ function backup_data_from_vm() {(
 
     cd minecraft-fig
     mv volumes volumes.bak
-    ssh "${SSH_OPTS[@]}" "root@${ip}" "tar --exclude='*.lock' -C '${remote_dir}' -c volumes" \
+    while_sshed "tar --exclude='*.lock' -C '${remote_dir}' -c volumes" \
     | tar --no-same-owner -x
     rm -rf volumes.bak
 )}
@@ -79,7 +104,20 @@ function compose_up() {
 
 function stop_services() {
     echo -e "\n>>> stopping services..."
-    while_connected docker-compose stop
+    while_connected docker-compose stop game
+    while_connected docker-compose kill
+}
+
+function game_container() {
+    while_connected docker-compose ps -q game
+}
+
+function mark2_attach() {
+    while_connected docker exec -it "$(game_container)" mark2 attach
+}
+
+function mark2_stop() {
+    while_connected docker exec "$(game_container)" mark2 stop
 }
 
 function backup_local_data() {
@@ -91,46 +129,48 @@ function backup_local_data() {
     done
 }
 
-function game_container() {
-    while_connected docker-compose ps -q game
-}
+function main() {
+    cd "${MY_DIR}"
 
-function mark2() {
-    while_connected docker exec -it "$(game_container)" mark2 "$@"
-}
-
-
-cd "${MY_DIR}"
-
-if [ "$1" == "up" ]; then
-    shift
-    create_vm "$@"
-    restore_data_to_vm &
-    compose_build
-    wait
-    compose_up -d
-    echo -e "\n>>> up: $(print_ip)"
-elif [ "$1" == "rm" ]; then
-    if while_connected docker-compose ps game | grep -sq Up; then
-        mark2 stop
+    if [ "$1" == "up" ]; then
+        shift
+        create_vm "$@"
+        enable_swap
+        restore_data_to_vm &
+        compose_build
+        wait
+        restart_remote_docker_daemon
+        compose_up -d
+        echo -e "\n>>> up: $(print_ip)"
+    elif [ "$1" == "rm" ]; then
+        shift
+        mark2_stop &> /dev/null || true
+        if [ "$1" != "--no-preserve" ]; then
+            stop_services
+            backup_data_from_vm
+        fi
+        delete_vm
+        if [ "$1" != "--no-preserve" ]; then
+            backup_local_data
+        fi
+    elif [ "$1" == "admin" ]; then
+        mark2_attach
+    elif [ "$1" == "map" ]; then
+        compose_up mapcrafter
+    elif [ "$1" == "compose" ]; then
+        shift
+        while_connected docker-compose "$@"
+    elif [ "$1" == "docker" ]; then
+        shift
+        while_connected docker "$@"
+    else
+        echo "Usage....... $0 (up [driver]|map|admin|rm [--no-preserve])"
+        echo "Debugging... $0 (compose [args...]|docker [args...])"
+        exit 1
     fi
-    stop_services
-    backup_data_from_vm
-    delete_vm
-    backup_local_data
-elif [ "$1" == "admin" ]; then
-    mark2 attach
-elif [ "$1" == "map" ]; then
-    compose_up mapcrafter
-elif [ "$1" == "compose" ]; then
-    shift
-    while_connected docker-compose "$@"
-elif [ "$1" == "docker" ]; then
-    shift
-    while_connected docker "$@"
-elif [ "$1" == "backup" ]; then
-    backup_local_data
-else
-    echo "Usage: $0 (up [driver]|map|admin|compose [args...]|docker [args...]|rm|backup)"
-    exit 1
+}
+
+
+if [ "${BASH_SOURCE[0]}" == "${0}" ]; then
+    main "$@"
 fi
