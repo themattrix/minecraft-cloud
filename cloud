@@ -98,6 +98,7 @@ function backup_data_from_vm() {(
     local ip=$(print_ip)
     local game_volumes="minecraft-fig/volumes/game"
     local remote_dir="${PWD}/${game_volumes}"
+    local d=
 
     function update_from_vm() {
         local subdir=$1
@@ -110,7 +111,9 @@ function backup_data_from_vm() {(
     cd "${game_volumes}"
 
     # Completely replace existing world data
-    with_dir_moved "world" update_from_vm "world"
+    for d in "world" "world_nether" "world_the_end"; do
+        with_dir_moved "${d}" update_from_vm "${d}"
+    done
 
     # Update custom settings
     update_from_vm "settings-custom"
@@ -162,9 +165,9 @@ function backup_local_data() {
 function with_dir_moved() {
     local dir=$1
     shift
-    mv "${dir}" "${dir}.bak"
+    if [ -e "${dir}" ]; then mv "${dir}" "${dir}.bak"; fi
     "$@"
-    rm -rf "${dir}.bak"
+    if [ -e "${dir}.bak" ]; then rm -rf "${dir}.bak"; fi
 }
 
 
