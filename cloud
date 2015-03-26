@@ -90,7 +90,7 @@ function restore_data_to_vm() {
 
     while_sshed "mkdir -p '${remote_dir}'"
 
-    tar --exclude='*.lock' -C minecraft-fig -c volumes \
+    tar --exclude='*.lock' --exclude=".git" -C minecraft-fig -c volumes \
     | while_sshed "tar -C '${remote_dir}' --no-same-owner -x"
 }
 
@@ -111,7 +111,7 @@ function backup_data_from_vm() {(
 
     # Completely replace existing world data
     with_dir_moved "world" update_from_vm "world"
-    
+
     # Update custom settings
     update_from_vm "settings-custom"
 
@@ -164,7 +164,7 @@ function with_dir_moved() {
     shift
     mv "${dir}" "${dir}.bak"
     "$@"
-    rm -rf "${dir}.bak" 
+    rm -rf "${dir}.bak"
 }
 
 
