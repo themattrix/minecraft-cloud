@@ -15,6 +15,8 @@ set -o pipefail
 
 readonly MY_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly VM_NAME=minecraft
+readonly DOCKER_URL="https://test.docker.com/builds/Linux/x86_64/docker-1.6.0-rc2"
+readonly GAME_VOLUMES="minecraft-fig/volumes/game"
 readonly RUN_LOCAL_BACKUP_IN="minecraft-fig"
 readonly RUN_LOCAL_BACKUP_ON=("volumes")
 readonly SSH_OPTS=(
@@ -47,20 +49,54 @@ function create_vm() {(
         "${VM_NAME}"
 )}
 
+function update_docker() {
+    echo -e "\n>>> updating docker..."
+
+    local cmd=""
+    cmd+='docker_path=$(which docker)'
+    cmd+=' && service docker stop'
+    cmd+='; curl -o "${docker_path}" "'"${DOCKER_URL}"'"'
+    cmd+=' && chmod +x "${docker_path}"'
+    cmd+=' && service docker start'
+    while_sshed "(${cmd})"
+}
+
 function enable_swap() {
+    local size=$1
+
     echo -en "\n>>> enabling swapfile..."
 
     local cmd=""
     cmd+='if [ $(swapon -s | wc -l) -eq 1 ]; then '
     cmd+="echo"
-    cmd+="&& fallocate -l 2G /swapfile"
-    cmd+="&& chmod 600 /swapfile"
-    cmd+="&& mkswap /swapfile"
-    cmd+="&& swapon /swapfile"
-    cmd+="&& sysctl vm.swappiness=0"
+    cmd+=" && fallocate -l ${size} /swapfile"
+    cmd+=" && chmod 600 /swapfile"
+    cmd+=" && mkswap /swapfile"
+    cmd+=" && swapon /swapfile"
+    cmd+=" && sysctl vm.swappiness=0"
     cmd+="; else "
     cmd+="echo done"
     cmd+="; fi"
+
+    while_sshed "(${cmd})"
+}
+
+function make_ramdisk() {
+    local path=$1
+    local size=$2
+
+    echo -en "\n>>> enabling ${size} ramdisk..."
+
+    local cmd=""
+    cmd+="if ! grep -sq '^tmpfs ${path}' /etc/fstab; then "
+    cmd+="echo -e 'tmpfs ${path} tmpfs rw,size=${size} 0 0' >> /etc/fstab"
+    cmd+=" && echo"
+    cmd+=" && mkdir -p ${path}"
+    cmd+=" && mount ${path}"
+    cmd+="; else "
+    cmd+="echo done"
+    cmd+="; fi"
+    cmd+=" && (mount | grep -F '${path}')"
 
     while_sshed "(${cmd})"
 }
@@ -81,6 +117,10 @@ function while_sshed() {
     ssh "${SSH_OPTS[@]}" "root@${ip}" "$@"
 }
 
+function interactive_ssh() {
+    while_sshed -t "$@"
+}
+
 function restart_remote_docker_daemon() {
     while_sshed "service docker restart"
 }
@@ -96,8 +136,7 @@ function restore_data_to_vm() {
 
 function backup_data_from_vm() {(
     local ip=$(print_ip)
-    local game_volumes="minecraft-fig/volumes/game"
-    local remote_dir="${PWD}/${game_volumes}"
+    local remote_dir="${PWD}/${GAME_VOLUMES}"
     local d=
 
     function update_from_vm() {
@@ -108,7 +147,7 @@ function backup_data_from_vm() {(
 
     echo -e "\n>>> backing up data from vm..."
 
-    cd "${game_volumes}"
+    cd "${GAME_VOLUMES}"
 
     # Completely replace existing world data
     for d in "world" "world_nether" "world_the_end"; do
@@ -189,7 +228,9 @@ function main() {
             find "minecraft-fig" -type f -name "spigot.jar" -exec rm -v {} +
         fi
         create_vm "$@"
-        enable_swap
+        enable_swap "4G"
+        make_ramdisk "${PWD}/${GAME_VOLUMES}" "512M"
+        update_docker
         restore_data_to_vm &
         compose_build
         wait
@@ -211,6 +252,9 @@ function main() {
         mark2_attach
     elif [ "$1" == "map" ]; then
         compose_up mapcrafter
+    elif [ "$1" == "ssh" ]; then
+        shift
+        interactive_ssh "$@"
     elif [ "$1" == "compose" ]; then
         shift
         while_connected docker-compose "$@"
@@ -219,7 +263,7 @@ function main() {
         while_connected docker "$@"
     else
         echo "Usage...... $0 (up [--build-spigot] [driver]|map|admin|rm [--no-preserve])"
-        echo "Advanced... $0 (compose [args...]|docker [args...])"
+        echo "Advanced... $0 (ssh [args...]|compose [args...]|docker [args...])"
         exit 1
     fi
 }
