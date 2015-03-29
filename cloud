@@ -136,16 +136,20 @@ function stop_services() {
     while_connected docker-compose kill
 }
 
-function game_container() {
-    while_connected docker-compose ps -q game
+function container_id() {
+    local name=$1
+    while_connected docker-compose ps -q "${name}"
 }
 
 function mark2_attach() {
-    while_connected docker exec -it "$(game_container)" mark2 attach
+    # Launch this long-running connection over SSH instead of through docker.
+    # Docker seems to have some kind of memory leak for this kind of thing
+    # right now.
+    while_sshed -t "docker exec -it $(container_id game) mark2 attach"
 }
 
 function mark2_stop() {
-    while_connected docker exec "$(game_container)" mark2 stop
+    while_connected docker exec "$(container_id game)" mark2 stop
 }
 
 function backup_local_data() {
