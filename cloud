@@ -15,7 +15,6 @@ set -o pipefail
 
 readonly MY_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly VM_NAME=minecraft
-readonly DOCKER_URL="https://test.docker.com/builds/Linux/x86_64/docker-1.6.0-rc5"
 readonly GAME_VOLUMES="minecraft-fig/volumes/game"
 readonly RUN_LOCAL_BACKUP_IN="minecraft-fig"
 readonly RUN_LOCAL_BACKUP_ON=("volumes")
@@ -44,22 +43,10 @@ function create_vm() {(
     source "${driver}.auth"
     source "${driver}.spec"
 
-    docker-machine create \
+    docker-machine -D create \
         --driver "${driver}" \
-        "${VM_NAME}"
+        "${VM_NAME}" | cat
 )}
-
-function update_docker() {
-    echo -e "\n>>> updating docker..."
-
-    local cmd=""
-    cmd+='docker_path=$(which docker)'
-    cmd+=' && service docker stop'
-    cmd+='; curl -o "${docker_path}" "'"${DOCKER_URL}"'"'
-    cmd+=' && chmod +x "${docker_path}"'
-    cmd+=' && service docker start'
-    while_sshed "(${cmd})"
-}
 
 function enable_swap() {
     local size=$1
@@ -108,7 +95,7 @@ function delete_vm() {
 
 function while_connected() {(
     cd minecraft-fig
-    $(docker-machine env "${VM_NAME}")
+    eval "$(docker-machine env "${VM_NAME}")"
     "$@"
 )}
 
@@ -230,7 +217,6 @@ function main() {
         create_vm "$@"
         enable_swap "4G"
         make_ramdisk "${PWD}/${GAME_VOLUMES}" "512M"
-        update_docker
         restore_data_to_vm &
         compose_build
         wait
