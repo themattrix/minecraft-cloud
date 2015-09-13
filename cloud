@@ -43,9 +43,9 @@ function create_vm() {(
     source "${driver}.auth"
     source "${driver}.spec"
 
-    docker-machine -D create \
+    docker-machine create \
         --driver "${driver}" \
-        "${VM_NAME}" | cat
+        "${VM_NAME}"
 )}
 
 function enable_swap() {
