@@ -35,14 +35,23 @@ function print_ip() {
     docker-machine ip "${VM_NAME}"
 }
 
+function print_ssh_user() {
+    docker-machine inspect -f '{{.Driver.SSHUser}}' "${VM_NAME}"
+}
+
 function create_vm() {(
     local driver=${1-digitalocean}
 
-    echo -e "\n>>> creating vm on ${driver}..."
+    echo -en "\n>>> creating vm on ${driver}..."
+
+    if docker-machine env "${VM_NAME}" &> /dev/null; then
+        print_ip
+        return
+    fi
 
     source "${driver}.auth"
     source "${driver}.spec"
-
+    echo
     docker-machine create \
         --driver "${driver}" \
         "${VM_NAME}"
@@ -53,19 +62,24 @@ function enable_swap() {
 
     echo -en "\n>>> enabling swapfile..."
 
+    if ! while_sshed "which fallocate" &> /dev/null; then
+        echo "skipping (no fallocate)"
+        return
+    fi
+
     local cmd=""
-    cmd+='if [ $(swapon -s | wc -l) -eq 1 ]; then '
-    cmd+="echo"
+    cmd+='if [ $(swapon -s | wc -l) -eq 1 ]; then'
+    cmd+=" echo"
     cmd+=" && fallocate -l ${size} /swapfile"
     cmd+=" && chmod 600 /swapfile"
     cmd+=" && mkswap /swapfile"
     cmd+=" && swapon /swapfile"
     cmd+=" && sysctl vm.swappiness=0"
-    cmd+="; else "
-    cmd+="echo done"
+    cmd+="; else"
+    cmd+=" echo done"
     cmd+="; fi"
 
-    while_sshed "(${cmd})"
+    while_sshed "sudo bash -c \"${cmd}\""
 }
 
 function make_ramdisk() {
@@ -85,7 +99,7 @@ function make_ramdisk() {
     cmd+="; fi"
     cmd+=" && (mount | grep -F '${path}')"
 
-    while_sshed "(${cmd})"
+    while_sshed "sudo bash -c \"${cmd}\""
 }
 
 function delete_vm() {
@@ -95,21 +109,19 @@ function delete_vm() {
 
 function while_connected() {(
     cd minecraft-fig
+    docker-machine env "${VM_NAME}" > /dev/null
     eval "$(docker-machine env "${VM_NAME}")"
     "$@"
 )}
 
 function while_sshed() {
     local ip=$(print_ip)
-    ssh "${SSH_OPTS[@]}" "root@${ip}" "$@"
+    local user=$(print_ssh_user)
+    ssh -l "${user}" "${SSH_OPTS[@]}" "${ip}" "$@"
 }
 
 function interactive_ssh() {
     while_sshed -t "$@"
-}
-
-function restart_remote_docker_daemon() {
-    while_sshed "service docker restart"
 }
 
 function restore_data_to_vm() {
@@ -220,7 +232,6 @@ function main() {
         restore_data_to_vm &
         compose_build
         wait
-        restart_remote_docker_daemon
         compose_up -d
         echo -e "\n>>> up: $(print_ip)"
     elif [ "$1" == "rm" ]; then
