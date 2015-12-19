@@ -152,7 +152,7 @@ function backup_data_from_vm() {(
 
     function update_from_vm() {
         local subdir=$1
-        while_sshed "tar --exclude='*.lock' -C '${remote_dir}' -c '${subdir}'" \
+        while_sshed "sudo tar --exclude='*.lock' -C '${remote_dir}' -c '${subdir}'" \
         | tar --no-same-owner -x
     }
 
