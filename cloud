@@ -176,6 +176,10 @@ function compose_build() {
     while_connected docker-compose build "${@}"
 }
 
+function compose_pull() {
+    while_connected docker-compose pull "${@}"
+}
+
 function compose_up() {
     while_connected docker-compose up "${@}"
 }
@@ -237,7 +241,9 @@ function main() {
         fi
         create_vm "$@"
         restore_data_to_vm &
-        compose_build
+        compose_pull   # pull any image-based services
+        compose_build  # build any non-image-based services
+        echo -e "\n>>> waiting for world data upload to finish..."
         wait
         compose_up -d
         echo -e "\n>>> up: $(print_ip)"
