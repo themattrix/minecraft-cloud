@@ -141,26 +141,14 @@ function restore_data_to_vm() {
 
     tar --exclude='*.lock' --exclude=".git" -C minecraft-fig -c volumes | while_sshed "
         set -e
-        shopt -s dotglob
-
-        function sudo_if_needed {
-            \"\$@\" 2> /dev/null || sudo \"\$@\"
-        }
-
-        sudo_if_needed mkdir -p '${remote_dir}'
-
-        tmp=\$(mktemp -d)
-        tar -C \"\${tmp}\" --no-same-owner -x
-
-        sudo_if_needed mv \"\${tmp}\"/* '${remote_dir}'
-
-        rmdir \"\${tmp}\""
+        sudo mkdir -p '${remote_dir}'
+        sudo tar -C '${remote_dir}' --no-same-owner -x"
 }
 
 function backup_data_from_vm() {(
     local ip=$(print_ip)
     local remote_dir="${PWD}/${GAME_VOLUMES}"
-    local d=
+    local d
 
     function update_from_vm() {
         local subdir=$1
