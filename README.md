@@ -3,8 +3,9 @@
 Create a publically available Minecraft server for $0.03/hour (or less)!
 
 Your local world data is uploaded after the server is created, and downloaded
-before the server is destroyed. It is archived with [bup](https://github.com/bup/bup)
-after being downloaded so that you can always access old versions of your world.
+before the server is destroyed. It is incrementally archived with
+[bup](https://github.com/bup/bup) after being downloaded so that you can always
+access old versions of your world.
 
 Requirements:
 
@@ -12,6 +13,7 @@ Requirements:
 - [docker-compose](https://docs.docker.com/compose/install/)
 - [docker-machine](https://docs.docker.com/machine/install-machine/)
 - [Vultr driver for machine](https://github.com/janeczku/docker-machine-vultr) (only if using [Vultr](https://www.vultr.com/))
+- [OVH driver for machine](https://github.com/yadutaf/docker-machine-driver-ovh) (only if using [OVH](https://www.ovh.com/us/vps/vps-ssd.xml))
 - [bup](https://github.com/bup/bup)
 
 Get the code:
@@ -23,7 +25,7 @@ git submodule update --init
 ```
 
 Configure your cloud provider with `<driver>.spec` and `<driver>.auth`.
-Default spec files are provided for Digital Ocean and Vultr, as well as
+Default spec files are provided for Digital Ocean, Vultr, and OVH, as well as
 an example auth file for each.
 
 
@@ -33,11 +35,14 @@ an example auth file for each.
 # spin up a VM for $0.03/hour on DigitalOcean...
 ./cloud up digitalocean
 
-# ...or spin up a slightly faster VM for $0.03/hour on Vultr
+# ...or spin up a slightly faster VM for $0.03/hour on Vultr...
 ./cloud up vultr
 
+# ...or spin up a slightly slower but larger memory VM for $0.03/hour on OVH
+./cloud up ovh
+
 # monitor the logs from all running services
-./cloud logs
+./cloud compose logs
 
 # open the mark2 admin console
 ./cloud admin

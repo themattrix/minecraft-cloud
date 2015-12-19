@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 #
 # Bash settings
 #
@@ -55,10 +54,18 @@ function create_vm() {(
     docker-machine create \
         --driver "${driver}" \
         "${VM_NAME}"
+
+    enable_swap "${SWAP_SIZE:-4G}"
+    make_ramdisk "${PWD}/${GAME_VOLUMES}" "${RAMDISK_SIZE:-512M}"
 )}
 
 function enable_swap() {
     local size=$1
+
+    if [ "${size}" == "0" ]; then
+        echo -e "\n>>> not enabling swapfile"
+        return
+    fi
 
     echo -en "\n>>> enabling swapfile..."
 
@@ -85,6 +92,11 @@ function enable_swap() {
 function make_ramdisk() {
     local path=$1
     local size=$2
+
+    if [ "${size}" == "0" ]; then
+        echo -e "\n>>> not enabling ramdisk"
+        return
+    fi
 
     echo -en "\n>>> enabling ${size} ramdisk..."
 
@@ -127,10 +139,26 @@ function interactive_ssh() {
 function restore_data_to_vm() {
     local remote_dir="${PWD}/minecraft-fig"
 
-    while_sshed "mkdir -p '${remote_dir}'"
+    if while_sshed "ls -ad '${remote_dir}' &> /dev/null"; then
+        return  # already restored the data
+    fi
 
-    tar --exclude='*.lock' --exclude=".git" -C minecraft-fig -c volumes \
-    | while_sshed "tar -C '${remote_dir}' --no-same-owner -x"
+    tar --exclude='*.lock' --exclude=".git" -C minecraft-fig -c volumes | while_sshed "
+        set -e
+        shopt -s dotglob
+
+        function sudo_if_needed {
+            \"\$@\" 2> /dev/null || sudo \"\$@\"
+        }
+
+        sudo_if_needed mkdir -p '${remote_dir}'
+
+        tmp=\$(mktemp -d)
+        tar -C \"\${tmp}\" --no-same-owner -x
+
+        sudo_if_needed mv \"\${tmp}\"/* '${remote_dir}'
+
+        rmdir \"\${tmp}\""
 }
 
 function backup_data_from_vm() {(
@@ -180,10 +208,7 @@ function container_id() {
 }
 
 function mark2_attach() {
-    # Launch this long-running connection over SSH instead of through docker.
-    # Docker seems to have some kind of memory leak for this kind of thing
-    # right now.
-    while_sshed -t "docker exec -it $(container_id game) mark2 attach"
+    while_connected docker exec -it $(container_id game) mark2 attach
 }
 
 function mark2_stop() {
@@ -227,8 +252,6 @@ function main() {
             find "minecraft-fig" -type f -name "spigot.jar" -exec rm -v {} +
         fi
         create_vm "$@"
-        enable_swap "4G"
-        make_ramdisk "${PWD}/${GAME_VOLUMES}" "512M"
         restore_data_to_vm &
         compose_build
         wait
