@@ -139,10 +139,6 @@ function interactive_ssh() {
 function restore_data_to_vm() {
     local remote_dir="${PWD}/minecraft-fig"
 
-    if while_sshed "ls -ad '${remote_dir}' &> /dev/null"; then
-        return  # already restored the data
-    fi
-
     tar --exclude='*.lock' --exclude=".git" -C minecraft-fig -c volumes | while_sshed "
         set -e
         shopt -s dotglob
