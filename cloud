@@ -14,7 +14,8 @@ set -o pipefail
 
 readonly MY_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly VM_NAME=minecraft
-readonly GAME_VOLUMES="minecraft-fig/volumes/game"
+readonly ALL_VOLUMES="${MY_DIR}/minecraft-fig/volumes"
+readonly GAME_VOLUMES="${ALL_VOLUMES}/game"
 readonly RUN_LOCAL_BACKUP_IN="minecraft-fig"
 readonly RUN_LOCAL_BACKUP_ON=("volumes")
 readonly SSH_OPTS=(
@@ -136,63 +137,53 @@ function interactive_ssh() {
     while_sshed -t "$@"
 }
 
-function restore_data_to_vm() {
-    local remote_dir="${PWD}/minecraft-fig"
-
-    tar --exclude='*.lock' --exclude=".git" -C minecraft-fig -c volumes | while_sshed "
-        set -e
-        sudo mkdir -p '${remote_dir}'
-        sudo tar -C '${remote_dir}' --no-same-owner -x"
+function tar_volumes_to_stdout() {
+    tar -cz --exclude='*.lock' --exclude='.git' -C "${ALL_VOLUMES}" .
 }
 
-function backup_data_from_vm() {(
-    local ip=$(print_ip)
-    local remote_dir="${PWD}/${GAME_VOLUMES}"
-    local d
+function untar_volumes_from_stdin() {
+    tar --no-same-owner -x --warning=no-timestamp -C "${ALL_VOLUMES}"
+}
 
-    function update_from_vm() {
-        local subdir=$1
-        while_sshed "sudo tar --exclude='*.lock' -C '${remote_dir}' -c '${subdir}'" \
-        | tar --no-same-owner -x
-    }
+function restore_data_to_vm() {
+    while_sshed "mkdir -p '${ALL_VOLUMES}'"
+    tar_volumes_to_stdout | compose run --rm load_world_data_from_tar
+}
 
+function backup_data_from_vm() {
     echo -e "\n>>> backing up data from vm..."
 
-    cd "${GAME_VOLUMES}"
+    (
+        cd "${GAME_VOLUMES}"
 
-    # Completely replace existing world data
-    for d in "world" "world_nether" "world_the_end"; do
-        with_dir_moved "${d}" update_from_vm "${d}"
-    done
+        # Completely replace existing world data
+        if [ -d world ]; then mv world world.bak; fi
+        if [ -d world_nether ]; then mv world_nether world_nether.bak; fi
+        if [ -d world_the_end ]; then mv world_the_end world_the_end.bak; fi
+    )
 
-    # Update custom settings
-    update_from_vm "settings-custom"
+    # This command should work but there seems to be a bug in compose:
+    # compose run --rm save_world_data_to_tar | untar_volumes_from_stdin
+    # Instead, we'll defer to docker directly:
+    while_connected docker run --rm -v "${ALL_VOLUMES}:/volumes:ro" minecraftfig_save_world_data_to_tar | untar_volumes_from_stdin
 
-    # Update spigot
-    update_from_vm "spigot"
-)}
-
-function compose_build() {
-    while_connected docker-compose build "${@}"
+    # Remove old world data if downloads were successful
+    rm -rf "${GAME_VOLUMES}"/world*.bak
 }
 
-function compose_pull() {
-    while_connected docker-compose pull "${@}"
-}
-
-function compose_up() {
-    while_connected docker-compose up "${@}"
+function compose() {
+    while_connected docker-compose "${@}"
 }
 
 function stop_services() {
     echo -e "\n>>> stopping services..."
-    while_connected docker-compose stop game
-    while_connected docker-compose kill
+    compose stop game
+    compose kill
 }
 
 function container_id() {
     local name=$1
-    while_connected docker-compose ps -q "${name}"
+    compose ps -q "${name}"
 }
 
 function mark2_attach() {
@@ -214,19 +205,6 @@ function backup_local_data() {
 
 
 #
-# Generic Utilities
-#
-
-function with_dir_moved() {
-    local dir=$1
-    shift
-    if [ -e "${dir}" ]; then mv "${dir}" "${dir}.bak"; fi
-    "$@"
-    if [ -e "${dir}.bak" ]; then rm -rf "${dir}.bak"; fi
-}
-
-
-#
 # Entrypoint
 #
 
@@ -240,12 +218,13 @@ function main() {
             find "minecraft-fig" -type f -name "spigot.jar" -exec rm -v {} +
         fi
         create_vm "$@"
+        compose build load_world_data_from_tar save_world_data_to_tar
         restore_data_to_vm &
-        compose_pull   # pull any image-based services
-        compose_build  # build any non-image-based services
+        compose pull   # pull any image-based services
+        compose build  # build any non-image-based services
         echo -e "\n>>> waiting for world data upload to finish..."
         wait
-        compose_up -d
+        compose up -d
         echo -e "\n>>> up: $(print_ip)"
     elif [ "$1" == "rm" ]; then
         shift
@@ -261,13 +240,13 @@ function main() {
     elif [ "$1" == "admin" ]; then
         mark2_attach
     elif [ "$1" == "map" ]; then
-        compose_up mapcrafter
+        compose up mapcrafter
     elif [ "$1" == "ssh" ]; then
         shift
         interactive_ssh "$@"
     elif [ "$1" == "compose" ]; then
         shift
-        while_connected docker-compose "$@"
+        compose "$@"
     elif [ "$1" == "docker" ]; then
         shift
         while_connected docker "$@"
