@@ -57,7 +57,7 @@ function create_vm() {(
         "${VM_NAME}"
 
     enable_swap "${SWAP_SIZE:-4G}"
-    make_ramdisk "${PWD}/${GAME_VOLUMES}" "${RAMDISK_SIZE:-512M}"
+    make_ramdisk "${GAME_VOLUMES}" "${RAMDISK_SIZE:-512M}"
 )}
 
 function enable_swap() {
