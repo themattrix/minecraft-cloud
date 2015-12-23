@@ -16,6 +16,7 @@ readonly MY_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly VM_NAME=minecraft
 readonly ALL_VOLUMES="${MY_DIR}/minecraft-fig/volumes"
 readonly GAME_VOLUMES="${ALL_VOLUMES}/game"
+readonly DROPBOX_UPLOADER_CONFIG="${ALL_VOLUMES}/dropbox/.dropbox_uploader"
 readonly RUN_LOCAL_BACKUP_IN="minecraft-fig"
 readonly RUN_LOCAL_BACKUP_ON=("volumes")
 readonly SSH_OPTS=(
@@ -137,29 +138,45 @@ function interactive_ssh() {
     while_sshed -t "$@"
 }
 
+function restore_data_to_vm() {
+    if use_dropbox; then
+        load_dropbox_world_data
+    else
+        load_local_world_data
+    fi
+}
+
+function backup_data_from_vm {
+    echo -e "\n>>> backing up data from vm..."
+
+    # Download the world data and settings locally in parallel with uploading
+    # the same data to cloud providers (if the expected config files exist).
+    save_local_world_data &
+    if use_dropbox; then save_dropbox_world_data & fi
+    wait
+}
+
 function tar_volumes_to_stdout() {
-    tar -cz --exclude='*.lock' --exclude='.git' -C "${ALL_VOLUMES}" .
+    tar -cz --exclude='*.lock' --exclude='.git' --exclude='.gitignore' -C "${ALL_VOLUMES}" "$@"
 }
 
 function untar_volumes_from_stdin() {
     tar --no-same-owner -x --warning=no-timestamp -C "${ALL_VOLUMES}"
 }
 
-function restore_data_to_vm() {
+function load_local_world_data() {
     while_sshed "mkdir -p '${ALL_VOLUMES}'"
-    tar_volumes_to_stdout | compose run --rm load_world_data_from_tar
+    tar_volumes_to_stdout . | compose run --rm load_world_data_from_tar
 }
 
-function backup_data_from_vm() {
-    echo -e "\n>>> backing up data from vm..."
-
+function save_local_world_data() {
     (
         cd "${GAME_VOLUMES}"
 
         # Completely replace existing world data
-        if [ -d world ]; then mv world world.bak; fi
-        if [ -d world_nether ]; then mv world_nether world_nether.bak; fi
-        if [ -d world_the_end ]; then mv world_the_end world_the_end.bak; fi
+        for d in world world_nether world_the_end; do
+            if [ -d "${d}" ]; then mv -n "${d}" "${d}.bak"; fi
+        done
     )
 
     # This command should work but there seems to be a bug in compose:
@@ -169,6 +186,24 @@ function backup_data_from_vm() {
 
     # Remove old world data if downloads were successful
     rm -rf "${GAME_VOLUMES}"/world*.bak
+}
+
+function use_dropbox() {
+    [ -f "${DROPBOX_UPLOADER_CONFIG}" ]
+}
+
+function load_dropbox_world_data() {
+    while_sshed "mkdir -p '${ALL_VOLUMES}'"
+
+    # Copy dropbox config (if present) and default settings to the VM.
+    tar_volumes_to_stdout "dropbox" "game/settings-default" "game/settings-custom" | compose run --rm load_world_data_from_tar
+
+    # Copy the world data and custom settings from Dropbox.
+    compose run --rm load_world_data_from_dropbox
+}
+
+function save_dropbox_world_data() {
+    compose run --rm save_world_data_to_dropbox
 }
 
 function compose() {
@@ -203,6 +238,32 @@ function backup_local_data() {
     done
 }
 
+function up() {
+    create_vm "$@"
+
+    compose build \
+        load_world_data_from_tar \
+        save_world_data_to_tar
+
+    if use_dropbox; then
+        compose pull \
+            load_world_data_from_dropbox \
+            save_world_data_to_dropbox
+    fi
+
+    # Load the world data in parallel with pulling the remaining images.
+    restore_data_to_vm &
+    compose pull game map mapcrafter
+    echo -e "\n>>> waiting for world data upload to finish..."
+    wait
+
+    # Start mincraft services.
+    compose up -d game map mapcrafter
+
+    # Done! Notify the user.
+    echo -e "\n>>> up: $(print_ip)"
+}
+
 
 #
 # Entrypoint
@@ -217,15 +278,7 @@ function main() {
             shift
             find "minecraft-fig" -type f -name "spigot.jar" -exec rm -v {} +
         fi
-        create_vm "$@"
-        compose build load_world_data_from_tar save_world_data_to_tar
-        restore_data_to_vm &
-        compose pull   # pull any image-based services
-        compose build  # build any non-image-based services
-        echo -e "\n>>> waiting for world data upload to finish..."
-        wait
-        compose up -d
-        echo -e "\n>>> up: $(print_ip)"
+        up "$@"
     elif [ "$1" == "rm" ]; then
         shift
         mark2_stop &> /dev/null || true
