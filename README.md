@@ -2,10 +2,12 @@
 
 Create a publically available Minecraft server for $0.03/hour (or less)!
 
-Your local world data is uploaded after the server is created, and downloaded
+Your world data is uploaded after the server is created, and downloaded
 before the server is destroyed. It is incrementally archived with
 [bup](https://github.com/bup/bup) after being downloaded so that you can always
 access old versions of your world.
+
+> Slow upload speed? Your world data can also be loaded from and saved to [Dropbox](#Dropbox)!
 
 Requirements:
 
@@ -38,7 +40,7 @@ an example auth file for each.
 # ...or spin up a slightly faster VM for $0.03/hour on Vultr...
 ./cloud up vultr
 
-# ...or spin up a slightly slower but larger memory VM for $0.03/hour on OVH
+# ...or spin up a slightly slower but larger memory VM for $0.036/hour on OVH
 ./cloud up ovh
 
 # monitor the logs from all running services
@@ -63,3 +65,17 @@ Updating to the latest version of this project:
 git pull
 git submodule update
 ```
+
+
+## Dropbox
+
+When the following config file is present, your world data will be loaded from
+Dropbox after the server is created and saved to Dropbox before the server is
+destoryed:
+
+    minecraft-fig/volumes/dropbox/.dropbox_uploader
+
+Your world data will *also* be downloaded locally for archival with bup.
+
+See the [minecraft-fig README](https://github.com/themattrix/minecraft-fig/blob/master/README.md)
+for details about setting up the config file.
