@@ -7,7 +7,7 @@ before the server is destroyed. It is incrementally archived with
 [bup](https://github.com/bup/bup) after being downloaded so that you can always
 access old versions of your world.
 
-> Slow upload speed? Your world data can also be loaded from and saved to [Dropbox](#Dropbox)!
+> Slow upload speed? Your world data can also be loaded from and saved to [Dropbox](#dropbox)!
 
 Requirements:
 
