@@ -4,8 +4,7 @@
 # Bash settings
 #
 
-set -e
-set -o pipefail
+set -e -o pipefail
 
 
 #
@@ -13,7 +12,7 @@ set -o pipefail
 #
 
 readonly MY_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-readonly VM_NAME=minecraft
+readonly VM_NAME="minecraft"
 readonly ALL_VOLUMES="${MY_DIR}/minecraft-fig/volumes"
 readonly GAME_VOLUMES="${ALL_VOLUMES}/game"
 readonly DROPBOX_UPLOADER_CONFIG="${ALL_VOLUMES}/dropbox/.dropbox_uploader"
@@ -32,15 +31,15 @@ readonly SSH_OPTS=(
 # VM interaction functions
 #
 
-function print_ip() {
+function print_ip {
     docker-machine ip "${VM_NAME}"
 }
 
-function print_ssh_user() {
+function print_ssh_user {
     docker-machine inspect -f '{{.Driver.SSHUser}}' "${VM_NAME}"
 }
 
-function create_vm() {(
+function create_vm {
     local driver=${1-digitalocean}
 
     echo -en "\n>>> creating vm on ${driver}..."
@@ -49,19 +48,22 @@ function create_vm() {(
         print_ip
         return
     fi
-
-    source "${driver}.auth"
-    source "${driver}.spec"
     echo
-    docker-machine create \
-        --driver "${driver}" \
-        "${VM_NAME}"
 
-    enable_swap "${SWAP_SIZE:-4G}"
-    make_ramdisk "${GAME_VOLUMES}" "${RAMDISK_SIZE:-512M}"
-)}
+    (
+        source "${driver}.auth"
+        source "${driver}.spec"
 
-function enable_swap() {
+        docker-machine create \
+            --driver "${driver}" \
+            "${VM_NAME}"
+
+        enable_swap "${SWAP_SIZE:-0}"
+        make_ramdisk "${GAME_VOLUMES}" "${RAMDISK_SIZE:-512M}"
+    )
+}
+
+function enable_swap {
     local size=$1
 
     if [ "${size}" == "0" ]; then
@@ -83,15 +85,15 @@ function enable_swap() {
     cmd+=" && chmod 600 /swapfile"
     cmd+=" && mkswap /swapfile"
     cmd+=" && swapon /swapfile"
-    cmd+=" && sysctl vm.swappiness=0"
+    cmd+=" && sysctl vm.swappiness=1"
     cmd+="; else"
-    cmd+=" echo done"
+    cmd+=" echo 'already enabled'"
     cmd+="; fi"
 
     while_sshed "sudo bash -c \"${cmd}\""
 }
 
-function make_ramdisk() {
+function make_ramdisk {
     local path=$1
     local size=$2
 
@@ -116,33 +118,37 @@ function make_ramdisk() {
     while_sshed "sudo bash -c \"${cmd}\""
 }
 
-function delete_vm() {
+function delete_vm {
     echo -e "\n>>> deleting vm..."
     docker-machine rm "${VM_NAME}"
 }
 
-function while_connected() {(
+function while_connected {(
     cd minecraft-fig
     docker-machine env "${VM_NAME}" > /dev/null
     eval "$(docker-machine env "${VM_NAME}")"
     "$@"
 )}
 
-function while_sshed() {
-    local ip=$(print_ip)
-    local user=$(print_ssh_user)
-    ssh -l "${user}" "${SSH_OPTS[@]}" "${ip}" "$@"
+function while_sshed {
+    ssh -l "$(print_ssh_user)" "${SSH_OPTS[@]}" "$(print_ip)" "$@"
 }
 
-function interactive_ssh() {
+function interactive_ssh {
     while_sshed -t "$@"
 }
 
-function restore_data_to_vm() {
-    if use_dropbox; then
-        load_dropbox_world_data
-    else
-        load_local_world_data
+function remote_data_missing {
+    while_sshed "bash -c '[ ! -e \"${GAME_VOLUMES}/world/level.dat\" ]'"
+}
+
+function restore_data_to_vm {
+    if [ "${1}" == "--overwrite=true" ] || remote_data_missing; then
+        if use_dropbox; then
+            load_dropbox_world_data
+        else
+            load_local_world_data
+        fi
     fi
 }
 
@@ -151,94 +157,116 @@ function backup_data_from_vm {
 
     # Download the world data and settings locally in parallel with uploading
     # the same data to cloud providers (if the expected config files exist).
-    save_local_world_data &
-    if use_dropbox; then save_dropbox_world_data & fi
+    if use_dropbox; then
+        save_dropbox_world_data &
+    fi
+    save_local_world_data
     wait
 }
 
-function tar_volumes_to_stdout() {
+function tar_volumes_to_stdout {
     tar -cz --exclude='*.lock' --exclude='.git' --exclude='.gitignore' -C "${ALL_VOLUMES}" "$@"
 }
 
-function untar_volumes_from_stdin() {
+function untar_volumes_from_stdin {
     tar --no-same-owner -x --warning=no-timestamp -C "${ALL_VOLUMES}"
 }
 
-function load_local_world_data() {
+function load_local_world_data {
     while_sshed "mkdir -p '${ALL_VOLUMES}'"
     tar_volumes_to_stdout . | compose run --rm load_world_data_from_tar
 }
 
-function save_local_world_data() {
-    (
-        cd "${GAME_VOLUMES}"
-
-        # Completely replace existing world data
-        for d in world world_nether world_the_end; do
-            if [ -d "${d}" ]; then mv -n "${d}" "${d}.bak"; fi
-        done
-    )
-
-    # This command should work but there seems to be a bug in compose:
-    # compose run --rm save_world_data_to_tar | untar_volumes_from_stdin
-    # Instead, we'll defer to docker directly:
-    while_connected docker run --rm -v "${ALL_VOLUMES}:/volumes:ro" minecraftfig_save_world_data_to_tar | untar_volumes_from_stdin
-
-    # Remove old world data if downloads were successful
-    rm -rf "${GAME_VOLUMES}"/world*.bak
+function backup_items {
+    local i
+    for i in "${@}"; do
+        if [ -e "${i}" ]; then
+            mv -n "${i}" "${i}.bak"
+        fi
+    done
 }
 
-function use_dropbox() {
+function delete_backups {
+    local i
+    for i in "${@}"; do
+        rm -rf "${i}.bak"
+    done
+}
+
+function save_local_world_data {
+    local replace_items=(
+        "${GAME_VOLUMES}/world"
+        "${GAME_VOLUMES}/world_nether"
+        "${GAME_VOLUMES}/world_the_end"
+    )
+
+    # Complete replace existing world data.
+    backup_items "${replace_items[@]}"
+
+    function save_world_data_to_tar {
+        # TODO: This command should work but there seems to be a bug in compose:
+        # TODO:   compose run --rm save_world_data_to_tar
+        # TODO: Instead, we'll defer to docker directly (until the bug is fixed).
+        while_connected docker run --rm -v "${ALL_VOLUMES}:/volumes:ro" \
+            minecraftfig_save_world_data_to_tar
+    }
+
+    save_world_data_to_tar | untar_volumes_from_stdin
+
+    # Remove old world data if downloads were successful.
+    delete_backups "${replace_items[@]}"
+}
+
+function use_dropbox {
     [ -f "${DROPBOX_UPLOADER_CONFIG}" ]
 }
 
-function load_dropbox_world_data() {
+function load_dropbox_world_data {
     while_sshed "mkdir -p '${ALL_VOLUMES}'"
 
     # Copy dropbox config (if present) and default settings to the VM.
-    tar_volumes_to_stdout "dropbox" "game/settings-default" "game/settings-custom" | compose run --rm load_world_data_from_tar
+    tar_volumes_to_stdout "dropbox" "game/settings-default" | compose run --rm load_world_data_from_tar
 
     # Copy the world data and custom settings from Dropbox.
     compose run --rm load_world_data_from_dropbox
 }
 
-function save_dropbox_world_data() {
+function save_dropbox_world_data {
     compose run --rm save_world_data_to_dropbox
 }
 
-function compose() {
+function compose {
     while_connected docker-compose "${@}"
 }
 
-function stop_services() {
+function stop_services {
     echo -e "\n>>> stopping services..."
-    compose stop game
-    compose kill
+    compose stop
 }
 
-function container_id() {
+function container_id {
     local name=$1
     compose ps -q "${name}"
 }
 
-function mark2_attach() {
+function mark2_attach {
     while_connected docker exec -it $(container_id game) mark2 attach
 }
 
-function mark2_stop() {
+function mark2_stop {
     while_connected docker exec "$(container_id game)" mark2 stop
 }
 
-function backup_local_data() {
+function archive_local_data {
     for backup_script in backup_world_*; do
         if [ -x "${backup_script}" ]; then
-            echo -e "\n>>> backing up local data with '${backup_script}'..."
+            echo -e "\n>>> archiving up local data with '${backup_script}'..."
             "./${backup_script}" "${RUN_LOCAL_BACKUP_IN}" "${RUN_LOCAL_BACKUP_ON[@]}"
         fi
     done
 }
 
-function up() {
+function up {
     create_vm "$@"
 
     compose build \
@@ -257,7 +285,7 @@ function up() {
     echo -e "\n>>> waiting for world data upload to finish..."
     wait
 
-    # Start mincraft services.
+    # Start Minecraft services.
     compose up -d game map mapcrafter
 
     # Done! Notify the user.
@@ -269,7 +297,7 @@ function up() {
 # Entrypoint
 #
 
-function main() {
+function main {
     cd "${MY_DIR}"
 
     if [ "$1" == "up" ]; then
@@ -281,14 +309,14 @@ function main() {
         up "$@"
     elif [ "$1" == "rm" ]; then
         shift
-        mark2_stop &> /dev/null || true
+        mark2_stop &> /dev/null || :
         if [ "$1" != "--no-preserve" ]; then
             stop_services
             backup_data_from_vm
         fi
         delete_vm
         if [ "$1" != "--no-preserve" ]; then
-            backup_local_data
+            archive_local_data
         fi
     elif [ "$1" == "admin" ]; then
         mark2_attach
@@ -310,6 +338,4 @@ function main() {
     fi
 }
 
-if [ "${BASH_SOURCE[0]}" == "${0}" ]; then
-    main "$@"
-fi
+[ "${BASH_SOURCE[0]}" != "${0}" ] || main "$@"
