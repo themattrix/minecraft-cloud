@@ -15,6 +15,7 @@ readonly MY_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly VM_NAME="minecraft"
 readonly ALL_VOLUMES="${MY_DIR}/minecraft-fig/volumes"
 readonly GAME_VOLUMES="${ALL_VOLUMES}/game"
+readonly SPIGOT_JAR="${GAME_VOLUMES}/spigot/spigot.jar"
 readonly DROPBOX_UPLOADER_CONFIG="${ALL_VOLUMES}/dropbox/.dropbox_uploader"
 readonly RUN_LOCAL_BACKUP_IN="minecraft-fig"
 readonly RUN_LOCAL_BACKUP_ON=("volumes")
@@ -31,15 +32,15 @@ readonly SSH_OPTS=(
 # VM interaction functions
 #
 
-function print_ip {
+print_ip() {
     docker-machine ip "${VM_NAME}"
 }
 
-function print_ssh_user {
+print_ssh_user() {
     docker-machine inspect -f '{{.Driver.SSHUser}}' "${VM_NAME}"
 }
 
-function create_vm {
+create_vm() {
     local driver=${1-digitalocean}
 
     echo -en "\n>>> creating vm on ${driver}..."
@@ -63,7 +64,7 @@ function create_vm {
     )
 }
 
-function enable_swap {
+enable_swap() {
     local size=$1
 
     if [ "${size}" == "0" ]; then
@@ -93,7 +94,7 @@ function enable_swap {
     while_sshed "sudo bash -c \"${cmd}\""
 }
 
-function make_ramdisk {
+make_ramdisk() {
     local path=$1
     local size=$2
 
@@ -118,31 +119,31 @@ function make_ramdisk {
     while_sshed "sudo bash -c \"${cmd}\""
 }
 
-function delete_vm {
+delete_vm() {
     echo -e "\n>>> deleting vm..."
     docker-machine rm "${VM_NAME}"
 }
 
-function while_connected {(
+while_connected() (
     cd minecraft-fig
     docker-machine env "${VM_NAME}" > /dev/null
     eval "$(docker-machine env "${VM_NAME}")"
     "$@"
-)}
+)
 
-function while_sshed {
+while_sshed() {
     ssh -l "$(print_ssh_user)" "${SSH_OPTS[@]}" "$(print_ip)" "$@"
 }
 
-function interactive_ssh {
+interactive_ssh() {
     while_sshed -t "$@"
 }
 
-function remote_data_missing {
+remote_data_missing() {
     while_sshed "bash -c '[ ! -e \"${GAME_VOLUMES}/world/level.dat\" ]'"
 }
 
-function restore_data_to_vm {
+restore_data_to_vm() {
     if [ "${1}" == "--overwrite=true" ] || remote_data_missing; then
         if use_dropbox; then
             load_dropbox_world_data
@@ -152,7 +153,7 @@ function restore_data_to_vm {
     fi
 }
 
-function backup_data_from_vm {
+backup_data_from_vm() {
     echo -e "\n>>> backing up data from vm..."
 
     # Download the world data and settings locally in parallel with uploading
@@ -164,20 +165,20 @@ function backup_data_from_vm {
     wait
 }
 
-function tar_volumes_to_stdout {
+tar_volumes_to_stdout() {
     tar -cz --exclude='*.lock' --exclude='.git' --exclude='.gitignore' -C "${ALL_VOLUMES}" "$@"
 }
 
-function untar_volumes_from_stdin {
+untar_volumes_from_stdin() {
     tar --no-same-owner -x --warning=no-timestamp -C "${ALL_VOLUMES}"
 }
 
-function load_local_world_data {
+load_local_world_data() {
     while_sshed "mkdir -p '${ALL_VOLUMES}'"
     tar_volumes_to_stdout . | compose run --rm load_world_data_from_tar
 }
 
-function backup_items {
+backup_items() {
     local i
     for i in "${@}"; do
         if [ -e "${i}" ]; then
@@ -186,14 +187,14 @@ function backup_items {
     done
 }
 
-function delete_backups {
+delete_backups() {
     local i
     for i in "${@}"; do
         rm -rf "${i}.bak"
     done
 }
 
-function save_local_world_data {
+save_local_world_data() {
     local replace_items=(
         "${GAME_VOLUMES}/world"
         "${GAME_VOLUMES}/world_nether"
@@ -217,11 +218,11 @@ function save_local_world_data {
     delete_backups "${replace_items[@]}"
 }
 
-function use_dropbox {
+use_dropbox() {
     [ -f "${DROPBOX_UPLOADER_CONFIG}" ]
 }
 
-function load_dropbox_world_data {
+load_dropbox_world_data() {
     while_sshed "mkdir -p '${ALL_VOLUMES}'"
 
     # Copy dropbox config (if present) and default settings to the VM.
@@ -231,33 +232,33 @@ function load_dropbox_world_data {
     compose run --rm load_world_data_from_dropbox
 }
 
-function save_dropbox_world_data {
+save_dropbox_world_data() {
     compose run --rm save_world_data_to_dropbox
 }
 
-function compose {
+compose() {
     while_connected docker-compose "${@}"
 }
 
-function stop_services {
+stop_services() {
     echo -e "\n>>> stopping services..."
     compose stop
 }
 
-function container_id {
+container_id() {
     local name=$1
     compose ps -q "${name}"
 }
 
-function mark2_attach {
+mark2_attach() {
     while_connected docker exec -it $(container_id game) mark2 attach
 }
 
-function mark2_stop {
+mark2_stop() {
     while_connected docker exec "$(container_id game)" mark2 stop
 }
 
-function archive_local_data {
+archive_local_data() {
     for backup_script in backup_world_*; do
         if [ -x "${backup_script}" ]; then
             echo -e "\n>>> archiving up local data with '${backup_script}'..."
@@ -266,7 +267,7 @@ function archive_local_data {
     done
 }
 
-function up {
+up() {
     create_vm "$@"
 
     compose build \
@@ -279,10 +280,16 @@ function up {
             save_world_data_to_dropbox
     fi
 
-    # Load the world data in parallel with pulling the remaining images.
+    # Load the world data in parallel with pulling the remaining images and
+    # possibly building Spigot.
     restore_data_to_vm &
-    compose pull game map mapcrafter
-    echo -e "\n>>> waiting for world data upload to finish..."
+
+    if [ ! -e "${SPIGOT_JAR}" ]; then
+        compose pull build_spigot
+        compose run --rm build_spigot &
+    fi
+
+    compose pull game map mapcrafter &
     wait
 
     # Start Minecraft services.
@@ -297,14 +304,14 @@ function up {
 # Entrypoint
 #
 
-function main {
+main() {
     cd "${MY_DIR}"
 
     if [ "$1" == "up" ]; then
         shift
         if [ "$1" == "--build-spigot" ]; then
             shift
-            find "minecraft-fig" -type f -name "spigot.jar" -exec rm -v {} +
+            rm -f "${SPIGOT_JAR}"
         fi
         up "$@"
     elif [ "$1" == "rm" ]; then
