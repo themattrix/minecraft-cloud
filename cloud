@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 #
 # Bash settings
@@ -13,7 +13,8 @@ set -e -o pipefail
 
 readonly MY_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 readonly VM_NAME="minecraft"
-readonly ALL_VOLUMES="${MY_DIR}/minecraft-fig/volumes"
+readonly COMPOSE_ROOT="${MY_DIR}/minecraft-fig"
+readonly ALL_VOLUMES="${COMPOSE_ROOT}/volumes"
 readonly GAME_VOLUMES="${ALL_VOLUMES}/game"
 readonly SPIGOT_JAR="${GAME_VOLUMES}/spigot/spigot.jar"
 readonly DROPBOX_UPLOADER_CONFIG="${ALL_VOLUMES}/dropbox/.dropbox_uploader"
@@ -26,6 +27,12 @@ readonly SSH_OPTS=(
     -o UserKnownHostsFile=/dev/null
     -o LogLevel=quiet
 )
+
+#
+# Imports
+#
+
+source "${MY_DIR}/bash-concurrent/concurrent.lib.sh"
 
 
 #
@@ -40,92 +47,13 @@ print_ssh_user() {
     docker-machine inspect -f '{{.Driver.SSHUser}}' "${VM_NAME}"
 }
 
-create_vm() {
-    local driver=${1-digitalocean}
-
-    echo -en "\n>>> creating vm on ${driver}..."
-
-    if docker-machine env "${VM_NAME}" &> /dev/null; then
-        print_ip
-        return
-    fi
-    echo
-
-    (
-        source "${driver}.auth"
-        source "${driver}.spec"
-
-        docker-machine create \
-            --driver "${driver}" \
-            "${VM_NAME}"
-
-        enable_swap "${SWAP_SIZE:-0}"
-        make_ramdisk "${GAME_VOLUMES}" "${RAMDISK_SIZE:-512M}"
-    )
-}
-
-enable_swap() {
-    local size=$1
-
-    if [ "${size}" == "0" ]; then
-        echo -e "\n>>> not enabling swapfile"
-        return
-    fi
-
-    echo -en "\n>>> enabling swapfile..."
-
-    if ! while_sshed "which fallocate" &> /dev/null; then
-        echo "skipping (no fallocate)"
-        return
-    fi
-
-    local cmd=""
-    cmd+='if [ $(swapon -s | wc -l) -eq 1 ]; then'
-    cmd+=" echo"
-    cmd+=" && fallocate -l ${size} /swapfile"
-    cmd+=" && chmod 600 /swapfile"
-    cmd+=" && mkswap /swapfile"
-    cmd+=" && swapon /swapfile"
-    cmd+=" && sysctl vm.swappiness=1"
-    cmd+="; else"
-    cmd+=" echo 'already enabled'"
-    cmd+="; fi"
-
-    while_sshed "sudo bash -c \"${cmd}\""
-}
-
-make_ramdisk() {
-    local path=$1
-    local size=$2
-
-    if [ "${size}" == "0" ]; then
-        echo -e "\n>>> not enabling ramdisk"
-        return
-    fi
-
-    echo -en "\n>>> enabling ${size} ramdisk..."
-
-    local cmd=""
-    cmd+="if ! grep -sq '^tmpfs ${path}' /etc/fstab; then "
-    cmd+="echo -e 'tmpfs ${path} tmpfs rw,size=${size} 0 0' >> /etc/fstab"
-    cmd+=" && echo"
-    cmd+=" && mkdir -p ${path}"
-    cmd+=" && mount ${path}"
-    cmd+="; else "
-    cmd+="echo done"
-    cmd+="; fi"
-    cmd+=" && (mount | grep -F '${path}')"
-
-    while_sshed "sudo bash -c \"${cmd}\""
-}
-
 delete_vm() {
     echo -e "\n>>> deleting vm..."
     docker-machine rm "${VM_NAME}"
 }
 
 while_connected() (
-    cd minecraft-fig
+    cd "${COMPOSE_ROOT}"
     docker-machine env "${VM_NAME}" > /dev/null
     eval "$(docker-machine env "${VM_NAME}")"
     "$@"
@@ -267,37 +195,147 @@ archive_local_data() {
     done
 }
 
-up() {
-    create_vm "$@"
+up() (
+    local driver=${1-digitalocean}
 
-    compose build \
-        load_world_data_from_tar \
-        save_world_data_to_tar
+    use_dropbox && local data_source='dropbox' \
+                || local data_source='local'
 
-    if use_dropbox; then
-        compose pull \
-            load_world_data_from_dropbox \
-            save_world_data_to_dropbox
-    fi
+    source "${driver}.auth"
+    source "${driver}.spec"
 
-    # Load the world data in parallel with pulling the remaining images and
-    # possibly building Spigot.
-    restore_data_to_vm &
+    create_machine() {
+        if docker-machine env "${VM_NAME}" &> /dev/null; then
+            print_ip
+        else
+            docker-machine create --driver "${driver}" "${VM_NAME}"
+        fi
+    }
 
-    if [ ! -e "${SPIGOT_JAR}" ]; then
-        compose pull build_spigot
-        compose run --rm build_spigot &
-    fi
+    enable_swap() {
+        local size=$1
 
-    compose pull game map mapcrafter &
-    wait
+        if [ "${size}" == "0" ]; then
+            echo -e "\n>>> not enabling swapfile"
+            return
+        fi
 
-    # Start Minecraft services.
-    compose up -d game map mapcrafter
+        echo -en "\n>>> enabling swapfile..."
 
-    # Done! Notify the user.
-    echo -e "\n>>> up: $(print_ip)"
-}
+        if ! while_sshed "which fallocate" &> /dev/null; then
+            echo "skipping (no fallocate)"
+            return
+        fi
+
+        local cmd=""
+        cmd+='if [ $(swapon -s | wc -l) -eq 1 ]; then'
+        cmd+=" echo"
+        cmd+=" && fallocate -l ${size} /swapfile"
+        cmd+=" && chmod 600 /swapfile"
+        cmd+=" && mkswap /swapfile"
+        cmd+=" && swapon /swapfile"
+        cmd+=" && sysctl vm.swappiness=1"
+        cmd+="; else"
+        cmd+=" echo 'already enabled'"
+        cmd+="; fi"
+
+        while_sshed "sudo bash -c \"${cmd}\""
+    }
+
+    make_ramdisk() {
+        local path=$1
+        local size=$2
+
+        if [ "${size}" == "0" ]; then
+            echo -e "\n>>> not enabling ramdisk"
+            return
+        fi
+
+        echo -en "\n>>> enabling ${size} ramdisk..."
+
+        local cmd=""
+        cmd+="if ! grep -sq '^tmpfs ${path}' /etc/fstab; then "
+        cmd+="echo -e 'tmpfs ${path} tmpfs rw,size=${size} 0 0' >> /etc/fstab"
+        cmd+=" && echo"
+        cmd+=" && mkdir -p ${path}"
+        cmd+=" && mount ${path}"
+        cmd+="; else "
+        cmd+="echo done"
+        cmd+="; fi"
+        cmd+=" && (mount | grep -F '${path}')"
+
+        while_sshed "sudo bash -c \"${cmd}\""
+    }
+
+    prepare_save_restore_containers() {
+        set -e
+
+        compose build \
+            load_world_data_from_tar \
+            save_world_data_to_tar
+
+        if use_dropbox; then
+            compose pull \
+                load_world_data_from_dropbox \
+                save_world_data_to_dropbox
+        fi
+    }
+
+    should_build_spigot() {
+        [[ ! -e "${SPIGOT_JAR}" ]]
+    }
+
+    spigot_prepare_container() {
+        if should_build_spigot; then
+            compose pull build_spigot
+        fi
+    }
+
+    spigot_building_jar() {
+        if should_build_spigot; then
+            compose run --rm build_spigot
+        fi
+    }
+
+    # TODO: render world map ASAP
+    local args=(
+        - "Creating VM on ${driver}"                  create_machine
+        - "Enabling swap"                             enable_swap "${SWAP_SIZE:-0}"
+        - "Creating ramdisk"                          make_ramdisk "${GAME_VOLUMES}" "${RAMDISK_SIZE:-512M}"
+        - "Preparing save/restore containers"         prepare_save_restore_containers
+        - "Uploading world data from ${data_source}"  restore_data_to_vm
+        - "Spigot: preparing container"               spigot_prepare_container
+        - "Spigot: building JAR"                      spigot_building_jar
+        - "Preparing remaining containers"            compose pull game map mapcrafter
+        - "Starting services"                         compose up -d game map mapcrafter
+
+        --require "Creating VM on ${driver}"
+        --before  "Enabling swap"
+        --before  "Creating ramdisk"
+        --before  "Preparing save/restore containers"
+
+        --require "Creating ramdisk"
+        --require "Preparing save/restore containers"
+        --before  "Uploading world data from ${data_source}"
+
+        --require "Preparing save/restore containers"
+        --before  "Spigot: preparing container"
+
+        --require "Spigot: preparing container"
+        --before  "Spigot: building JAR"
+        --before  "Preparing remaining containers"
+
+        --require "Enabling swap"
+        --require "Uploading world data from ${data_source}"
+        --require "Spigot: building JAR"
+        --require "Preparing remaining containers"
+        --before  "Starting services"
+    )
+
+    printf '\n[CREATING MINECRAFT SERVER]\n'
+    concurrent "${args[@]}"
+    printf '\n>>> up: %s\n' "$(print_ip)"
+)
 
 
 #
