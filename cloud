@@ -297,17 +297,18 @@ up() (
         fi
     }
 
-    # TODO: render world map ASAP
     local args=(
         - "Creating VM on ${driver}"                  create_machine
         - "Enabling swap"                             enable_swap "${SWAP_SIZE:-0}"
         - "Creating ramdisk"                          make_ramdisk "${GAME_VOLUMES}" "${RAMDISK_SIZE:-512M}"
         - "Preparing save/restore containers"         prepare_save_restore_containers
         - "Uploading world data from ${data_source}"  restore_data_to_vm
+        - "Preparing map containers"                  compose pull map mapcrafter
+        - "Starting map render"                       compose up -d map mapcrafter
         - "Spigot: preparing container"               spigot_prepare_container
         - "Spigot: building JAR"                      spigot_building_jar
-        - "Preparing remaining containers"            compose pull game map mapcrafter
-        - "Starting services"                         compose up -d game map mapcrafter
+        - "Preparing game container"                  compose pull game
+        - "Starting game server"                      compose up -d game
 
         --require "Creating VM on ${driver}"
         --before  "Enabling swap"
@@ -319,17 +320,24 @@ up() (
         --before  "Uploading world data from ${data_source}"
 
         --require "Preparing save/restore containers"
+        --before  "Preparing map containers"
+
+        --require "Preparing map containers"
         --before  "Spigot: preparing container"
+        --before  "Starting map render"
+
+        --require "Uploading world data from ${data_source}"
+        --before  "Starting map render"
 
         --require "Spigot: preparing container"
         --before  "Spigot: building JAR"
-        --before  "Preparing remaining containers"
+        --before  "Preparing game container"
 
         --require "Enabling swap"
         --require "Uploading world data from ${data_source}"
         --require "Spigot: building JAR"
-        --require "Preparing remaining containers"
-        --before  "Starting services"
+        --require "Preparing game container"
+        --before  "Starting game server"
     )
 
     printf '\n[CREATING MINECRAFT SERVER]\n'
