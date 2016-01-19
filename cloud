@@ -48,11 +48,6 @@ print_ssh_user() {
     docker-machine inspect -f '{{.Driver.SSHUser}}' "${VM_NAME}"
 }
 
-delete_vm() {
-    echo -e "\n>>> deleting vm..."
-    docker-machine rm "${VM_NAME}"
-}
-
 while_connected() (
     cd "${COMPOSE_ROOT}"
     docker-machine env "${VM_NAME}" > /dev/null
@@ -68,89 +63,8 @@ interactive_ssh() {
     while_sshed -t "$@"
 }
 
-remote_data_missing() {
-    while_sshed "bash -c '[ ! -e \"${GAME_VOLUMES}/world/level.dat\" ]'"
-}
-
-restore_data_to_vm() {
-    if [ "${1}" == "--overwrite=true" ] || remote_data_missing; then
-        if use_dropbox; then
-            load_dropbox_world_data
-        else
-            load_local_world_data
-        fi
-    fi
-}
-
-tar_volumes_to_stdout() {
-    tar -cz --exclude='*.lock' --exclude='.git' --exclude='.gitignore' -C "${ALL_VOLUMES}" "$@"
-}
-
-untar_volumes_from_stdin() {
-    tar --no-same-owner -x --warning=no-timestamp -C "${ALL_VOLUMES}"
-}
-
-load_local_world_data() {
-    while_sshed "mkdir -p '${ALL_VOLUMES}'"
-    tar_volumes_to_stdout . | compose run --rm load_world_data_from_tar
-}
-
-backup_items() {
-    local i
-    for i in "${@}"; do
-        if [ -e "${i}" ]; then
-            mv -n "${i}" "${i}.bak"
-        fi
-    done
-}
-
-delete_backups() {
-    local i
-    for i in "${@}"; do
-        rm -rf "${i}.bak"
-    done
-}
-
-save_local_world_data() {
-    local replace_items=(
-        "${GAME_VOLUMES}/world"
-        "${GAME_VOLUMES}/world_nether"
-        "${GAME_VOLUMES}/world_the_end"
-    )
-
-    # Complete replace existing world data.
-    backup_items "${replace_items[@]}"
-
-    function save_world_data_to_tar {
-        # TODO: This command should work but there seems to be a bug in compose:
-        # TODO:   compose run --rm save_world_data_to_tar
-        # TODO: Instead, we'll defer to docker directly (until the bug is fixed).
-        while_connected docker run --rm -v "${ALL_VOLUMES}:/volumes:ro" \
-            minecraftfig_save_world_data_to_tar
-    }
-
-    save_world_data_to_tar | untar_volumes_from_stdin
-
-    # Remove old world data if downloads were successful.
-    delete_backups "${replace_items[@]}"
-}
-
 use_dropbox() {
     [ -f "${DROPBOX_UPLOADER_CONFIG}" ]
-}
-
-load_dropbox_world_data() {
-    while_sshed "mkdir -p '${ALL_VOLUMES}'"
-
-    # Copy dropbox config (if present) and default settings to the VM.
-    tar_volumes_to_stdout "dropbox" "game/settings-default" | compose run --rm load_world_data_from_tar
-
-    # Copy the world data and custom settings from Dropbox.
-    compose run --rm load_world_data_from_dropbox
-}
-
-save_dropbox_world_data() {
-    compose run --rm save_world_data_to_dropbox
 }
 
 compose() {
@@ -169,19 +83,6 @@ container_id() {
 
 mark2_attach() {
     while_connected docker exec -it $(container_id game) mark2 attach
-}
-
-mark2_stop() {
-    while_connected docker exec "$(container_id game)" mark2 stop
-}
-
-archive_local_data() {
-    for backup_script in backup_world_*; do
-        if [ -x "${backup_script}" ]; then
-            echo -e "\n>>> archiving up local data with '${backup_script}'..."
-            "./${backup_script}" "${RUN_LOCAL_BACKUP_IN}" "${RUN_LOCAL_BACKUP_ON[@]}"
-        fi
-    done
 }
 
 up() (
@@ -292,6 +193,39 @@ up() (
         fi
     }
 
+    restore_data_to_vm() {
+        if [ "${1}" == "--overwrite=true" ] || remote_data_missing; then
+            if use_dropbox; then
+                load_dropbox_world_data
+            else
+                load_local_world_data
+            fi
+        fi
+    }
+
+    remote_data_missing() {
+        while_sshed "bash -c '[ ! -e \"${GAME_VOLUMES}/world/level.dat\" ]'"
+    }
+
+    load_local_world_data() {
+        while_sshed "mkdir -p '${ALL_VOLUMES}'"
+        tar_volumes_to_stdout . | compose run --rm load_world_data_from_tar
+    }
+
+    load_dropbox_world_data() {
+        while_sshed "mkdir -p '${ALL_VOLUMES}'"
+
+        # Copy dropbox config (if present) and default settings to the VM.
+        tar_volumes_to_stdout "dropbox" "game/settings-default" | compose run --rm load_world_data_from_tar
+
+        # Copy the world data and custom settings from Dropbox.
+        compose run --rm load_world_data_from_dropbox
+    }
+
+    tar_volumes_to_stdout() {
+        tar -cz --exclude='*.lock' --exclude='.git' --exclude='.gitignore' -C "${ALL_VOLUMES}" "$@"
+    }
+
     local args=(
         - "Creating VM on ${driver}"                  create_machine
         - "Enabling swap"                             enable_swap "${SWAP_SIZE:-0}"
@@ -343,6 +277,72 @@ up() (
 down() (
     stop_mark2_and_ignore_errors() {
         mark2_stop || :
+    }
+
+    delete_vm() {
+        echo -e "\n>>> deleting vm..."
+        docker-machine rm "${VM_NAME}"
+    }
+
+    mark2_stop() {
+        while_connected docker exec "$(container_id game)" mark2 stop
+    }
+
+    backup_items() {
+        local i
+        for i in "${@}"; do
+            if [ -e "${i}" ]; then
+                mv -n "${i}" "${i}.bak"
+            fi
+        done
+    }
+
+    delete_backups() {
+        local i
+        for i in "${@}"; do
+            rm -rf "${i}.bak"
+        done
+    }
+
+    save_dropbox_world_data() {
+        compose run --rm save_world_data_to_dropbox
+    }
+
+    save_local_world_data() {
+        local replace_items=(
+            "${GAME_VOLUMES}/world"
+            "${GAME_VOLUMES}/world_nether"
+            "${GAME_VOLUMES}/world_the_end"
+        )
+
+        # Complete replace existing world data.
+        backup_items "${replace_items[@]}"
+
+        function save_world_data_to_tar {
+            # TODO: This command should work but there seems to be a bug in compose:
+            # TODO:   compose run --rm save_world_data_to_tar
+            # TODO: Instead, we will defer to docker directly (until the bug is fixed).
+            while_connected docker run --rm -v "${ALL_VOLUMES}:/volumes:ro" \
+                minecraftfig_save_world_data_to_tar
+        }
+
+        save_world_data_to_tar | untar_volumes_from_stdin
+
+        # Remove old world data if downloads were successful.
+        delete_backups "${replace_items[@]}"
+    }
+
+    untar_volumes_from_stdin() {
+        tar --no-same-owner -x --warning=no-timestamp -C "${ALL_VOLUMES}"
+    }
+
+    archive_local_data() {
+        for backup_script in backup_world_*; do
+            if [ -x "${backup_script}" ]; then
+                echo -e "\n>>> archiving up local data with '${backup_script}'..."
+                "./${backup_script}" "${RUN_LOCAL_BACKUP_IN}" "${RUN_LOCAL_BACKUP_ON[@]}"
+            fi
+        done
     }
 
     local args=()
