@@ -28,6 +28,7 @@ readonly SSH_OPTS=(
     -o LogLevel=quiet
 )
 
+
 #
 # Imports
 #
@@ -79,18 +80,6 @@ restore_data_to_vm() {
             load_local_world_data
         fi
     fi
-}
-
-backup_data_from_vm() {
-    echo -e "\n>>> backing up data from vm..."
-
-    # Download the world data and settings locally in parallel with uploading
-    # the same data to cloud providers (if the expected config files exist).
-    if use_dropbox; then
-        save_dropbox_world_data &
-    fi
-    save_local_world_data
-    wait
 }
 
 tar_volumes_to_stdout() {
@@ -196,10 +185,16 @@ archive_local_data() {
 }
 
 up() (
+    if [[ "${1}" == "--build-spigot" ]]; then
+        shift
+        rm -f "${SPIGOT_JAR}"
+    fi
+
     local driver=${1-digitalocean}
 
-    use_dropbox && local data_source='dropbox' \
-                || local data_source='local'
+    use_dropbox &&
+        local data_source='dropbox' ||
+        local data_source='local'
 
     source "${driver}.auth"
     source "${driver}.spec"
@@ -345,6 +340,49 @@ up() (
     printf '\n>>> up: %s\n' "$(print_ip)"
 )
 
+down() (
+    stop_mark2_and_ignore_errors() {
+        mark2_stop || :
+    }
+
+    local args=()
+
+    if [ "$1" != "--no-preserve" ]; then
+        args+=(
+            - "Stopping mark2"                      stop_mark2_and_ignore_errors
+            - "Stopping services"                   stop_services
+            - "Backing up world data to local"      save_local_world_data
+
+            --sequential
+        )
+    fi
+    if [[ "$1" != "--no-preserve" ]] && use_dropbox; then
+        args+=(
+            - "Backing up world data to dropbox"    save_dropbox_world_data
+
+            --require "Stopping services"
+            --before  "Backing up world data to dropbox"
+        )
+    fi
+    args+=(
+            - "Deleting VM"                         delete_vm
+
+            --require-all
+            --before  "Deleting VM"
+    )
+    if [ "$1" != "--no-preserve" ]; then
+        args+=(
+            - "Archiving local data"                archive_local_data
+
+            --require "Backing up world data to local"
+            --before  "Archiving local data"
+        )
+    fi
+
+    printf '\n[DELETING MINECRAFT SERVER]\n'
+    concurrent "${args[@]}"
+)
+
 
 #
 # Entrypoint
@@ -355,22 +393,10 @@ main() {
 
     if [ "$1" == "up" ]; then
         shift
-        if [ "$1" == "--build-spigot" ]; then
-            shift
-            rm -f "${SPIGOT_JAR}"
-        fi
         up "$@"
     elif [ "$1" == "rm" ]; then
         shift
-        mark2_stop &> /dev/null || :
-        if [ "$1" != "--no-preserve" ]; then
-            stop_services
-            backup_data_from_vm
-        fi
-        delete_vm
-        if [ "$1" != "--no-preserve" ]; then
-            archive_local_data
-        fi
+        down "$@"
     elif [ "$1" == "admin" ]; then
         mark2_attach
     elif [ "$1" == "map" ]; then
