@@ -93,18 +93,17 @@ up() (
 
     local driver=${1-digitalocean}
 
-    use_dropbox &&
-        local data_source='dropbox' ||
-        local data_source='local'
-
     source "${driver}.auth"
     source "${driver}.spec"
 
     create_machine() {
         if docker-machine env "${VM_NAME}" &> /dev/null; then
+            echo "(already created: $(print_ip))" >&3
             print_ip
         else
+            echo "(${driver})" >&3
             docker-machine create --driver "${driver}" "${VM_NAME}"
+            echo "(${driver}: $(print_ip))" >&3
         fi
     }
 
@@ -112,6 +111,7 @@ up() (
         local size=$1
 
         if [ "${size}" == "0" ]; then
+            echo "(skipping)" >&3
             echo -e "\n>>> not enabling swapfile"
             return
         fi
@@ -119,9 +119,12 @@ up() (
         echo -en "\n>>> enabling swapfile..."
 
         if ! while_sshed "which fallocate" &> /dev/null; then
+            echo "(skipping)" >&3
             echo "skipping (no fallocate)"
             return
         fi
+
+        echo "(${size})" >&3
 
         local cmd=""
         cmd+='if [ $(swapon -s | wc -l) -eq 1 ]; then'
@@ -143,10 +146,12 @@ up() (
         local size=$2
 
         if [ "${size}" == "0" ]; then
+            echo "(skipping)" >&3
             echo -e "\n>>> not enabling ramdisk"
             return
         fi
 
+        echo "(${size})" >&3
         echo -en "\n>>> enabling ${size} ramdisk..."
 
         local cmd=""
@@ -184,20 +189,26 @@ up() (
     spigot_prepare_container() {
         if should_build_spigot; then
             compose pull build_spigot
+        else
+            echo "(already build)" >&3
         fi
     }
 
     spigot_building_jar() {
         if should_build_spigot; then
             compose run --rm build_spigot
+        else
+            echo "(already built)" >&3
         fi
     }
 
     restore_data_to_vm() {
         if [ "${1}" == "--overwrite=true" ] || remote_data_missing; then
             if use_dropbox; then
+                echo "(from dropbox)" >&3
                 load_dropbox_world_data
             else
+                echo "(from local)" >&3
                 load_local_world_data
             fi
         fi
@@ -227,11 +238,11 @@ up() (
     }
 
     local args=(
-        - "Creating VM on ${driver}"                  create_machine
+        - "Creating VM"                               create_machine
         - "Enabling swap"                             enable_swap "${SWAP_SIZE:-0}"
         - "Creating ramdisk"                          make_ramdisk "${GAME_VOLUMES}" "${RAMDISK_SIZE:-512M}"
         - "Preparing save/restore containers"         prepare_save_restore_containers
-        - "Uploading world data from ${data_source}"  restore_data_to_vm
+        - "Uploading world data"                      restore_data_to_vm
         - "Preparing map containers"                  compose pull map mapcrafter
         - "Starting map render"                       compose up -d map mapcrafter
         - "Spigot: preparing container"               spigot_prepare_container
@@ -239,14 +250,14 @@ up() (
         - "Preparing game container"                  compose pull game
         - "Starting game server"                      compose up -d game
 
-        --require "Creating VM on ${driver}"
+        --require "Creating VM"
         --before  "Enabling swap"
         --before  "Creating ramdisk"
         --before  "Preparing save/restore containers"
 
         --require "Creating ramdisk"
         --require "Preparing save/restore containers"
-        --before  "Uploading world data from ${data_source}"
+        --before  "Uploading world data"
 
         --require "Preparing save/restore containers"
         --before  "Preparing map containers"
@@ -255,7 +266,7 @@ up() (
         --before  "Spigot: preparing container"
         --before  "Starting map render"
 
-        --require "Uploading world data from ${data_source}"
+        --require "Uploading world data"
         --before  "Starting map render"
 
         --require "Spigot: preparing container"
@@ -263,7 +274,7 @@ up() (
         --before  "Preparing game container"
 
         --require "Enabling swap"
-        --require "Uploading world data from ${data_source}"
+        --require "Uploading world data"
         --require "Spigot: building JAR"
         --require "Preparing game container"
         --before  "Starting game server"
@@ -281,7 +292,7 @@ down() (
 
     delete_vm() {
         echo -e "\n>>> deleting vm..."
-        docker-machine rm "${VM_NAME}"
+        docker-machine rm -y "${VM_NAME}"
     }
 
     mark2_stop() {
@@ -339,6 +350,7 @@ down() (
     archive_local_data() {
         for backup_script in backup_world_*; do
             if [ -x "${backup_script}" ]; then
+                echo "(${backup_script})" >&3
                 echo -e "\n>>> archiving up local data with '${backup_script}'..."
                 "./${backup_script}" "${RUN_LOCAL_BACKUP_IN}" "${RUN_LOCAL_BACKUP_ON[@]}"
             fi
