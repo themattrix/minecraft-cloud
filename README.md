@@ -1,6 +1,6 @@
 # Minecraft Cloud
 
-Create a publically available Minecraft server for $0.03/hour (or less)!
+Create a publically available Minecraft server for just a few cents per hour!
 
 Your world data is uploaded after the server is created, and downloaded
 before the server is destroyed. It is incrementally archived with
