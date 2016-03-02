@@ -16,6 +16,7 @@ Requirements:
 - [docker-machine](https://docs.docker.com/machine/install-machine/)
 - [Vultr driver for machine](https://github.com/janeczku/docker-machine-vultr) (only if using [Vultr](https://www.vultr.com/))
 - [OVH driver for machine](https://github.com/yadutaf/docker-machine-driver-ovh) (only if using [OVH](https://www.ovh.com/us/vps/vps-ssd.xml))
+- [Packet driver for machine](https://github.com/packethost/docker-machine-driver-packet) (only if using [Packet](https://www.packet.net/))
 - [bup](https://github.com/bup/bup)
 
 Get the code:
@@ -42,6 +43,9 @@ an example auth file for each.
 
 # ...or spin up a slightly slower but larger memory VM for $0.036/hour on OVH
 ./cloud up ovh
+
+# ...or spin up a bare metal machine for $0.05/hour on Packet
+./cloud up packet
 
 # monitor the logs from all running services
 ./cloud compose logs

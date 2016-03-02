@@ -1,0 +1,5 @@
+export PACKET_API_KEY=abcdefghijklmnopqrstuvwxyz123456
+export PACKET_PROJECT_ID=2caaecc6-c8f5-4c91-a57c-409cf03c299e   # grab this from your project's URL
+export PACKET_FACILITY_CODE=ewr1                                # Parsippany, NJ
+export PACKET_PLAN=baremetal_0                                  # 4 cores @ 2.4GHz (Atom C2550), 8GB DDR3 RAM, 80GB SSD, 1Gbps network
+export PACKET_BILLING_CYCLE=hourly                              # or "monthly"
