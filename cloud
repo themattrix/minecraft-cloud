@@ -86,9 +86,15 @@ mark2_attach() {
 }
 
 up() (
+    if [[ "${1}" == "--delete-world" ]]; then
+        shift
+        rm -rf -- "${GAME_VOLUMES}"/world*
+        use_dropbox() { false; }
+    fi
+
     if [[ "${1}" == "--build-spigot" ]]; then
         shift
-        rm -f "${SPIGOT_JAR}"
+        rm -f -- "${SPIGOT_JAR}"
     fi
 
     local driver=${1-digitalocean}
@@ -203,7 +209,7 @@ up() (
     }
 
     restore_data_to_vm() {
-        if [ "${1}" == "--overwrite=true" ] || remote_data_missing; then
+        if [[ "${1}" == "--overwrite=true" ]] || remote_data_missing; then
             if use_dropbox; then
                 echo "(from dropbox)" >&3
                 load_dropbox_world_data
@@ -423,7 +429,7 @@ main() {
         shift
         while_connected docker "$@"
     else
-        echo "Usage...... $0 (up [--build-spigot] [driver]|map|admin|rm [--no-preserve])"
+        echo "Usage...... $0 (up [--delete-world] [--build-spigot] [driver]|map|admin|rm [--no-preserve])"
         echo "Advanced... $0 (ssh [args...]|compose [args...]|docker [args...])"
         exit 1
     fi
