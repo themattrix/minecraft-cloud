@@ -68,7 +68,7 @@ use_dropbox() {
 }
 
 compose() {
-    while_connected docker-compose "${@}"
+    while_connected docker-compose -f "docker-compose.images.yml" "${@}"
 }
 
 stop_services() {
@@ -226,14 +226,14 @@ up() (
 
     load_local_world_data() {
         while_sshed "mkdir -p '${ALL_VOLUMES}'"
-        tar_volumes_to_stdout . | compose run --rm load_world_data_from_tar
+        tar_volumes_to_stdout . | load_world_data_from_tar
     }
 
     load_dropbox_world_data() {
         while_sshed "mkdir -p '${ALL_VOLUMES}'"
 
         # Copy dropbox config (if present) and default settings to the VM.
-        tar_volumes_to_stdout "dropbox" "game/settings-default" | compose run --rm load_world_data_from_tar
+        tar_volumes_to_stdout "dropbox" "game/settings-default" | load_world_data_from_tar
 
         # Copy the world data and custom settings from Dropbox.
         compose run --rm load_world_data_from_dropbox
@@ -241,6 +241,15 @@ up() (
 
     tar_volumes_to_stdout() {
         tar -cz --exclude='*.lock' --exclude='.git' --exclude='.gitignore' -C "${ALL_VOLUMES}" "$@"
+    }
+
+    load_world_data_from_tar() {
+        # TODO: This command should work but there seems to be a bug in compose:
+        # TODO:   compose run --rm load_world_data_from_tar
+        # TODO: Instead, we will defer to docker directly (until the bug is fixed).
+        # TODO: <https://github.com/docker/compose/issues/3829>
+        while_connected docker run --rm -i -v "${ALL_VOLUMES}:/volumes" \
+            minecraftfig_load_world_data_from_tar
     }
 
     local args=(
@@ -401,6 +410,11 @@ down() (
     concurrent "${args[@]}"
 )
 
+proxy() {
+    printf 'Forwarding local port 25565 to %s. CTRL+C to stop.\n' "$(print_ip)"
+    socat TCP-LISTEN:25565,fork TCP:$(print_ip):25565
+}
+
 
 #
 # Entrypoint
@@ -412,6 +426,8 @@ main() {
     if [ "$1" == "up" ]; then
         shift
         up "$@"
+    elif [ "$1" == "proxy" ]; then
+        proxy
     elif [ "$1" == "rm" ]; then
         shift
         down "$@"
@@ -429,7 +445,7 @@ main() {
         shift
         while_connected docker "$@"
     else
-        echo "Usage...... $0 (up [--delete-world] [--build-spigot] [driver]|map|admin|rm [--no-preserve])"
+        echo "Usage...... $0 (up [--delete-world] [--build-spigot] [driver]|proxy|map|admin|rm [--no-preserve])"
         echo "Advanced... $0 (ssh [args...]|compose [args...]|docker [args...])"
         exit 1
     fi
