@@ -86,7 +86,10 @@ mark2_attach() {
 }
 
 up() (
-    if [[ "${1}" == "--delete-world" ]]; then
+    if [[ "${1}" == "--local" ]]; then
+        shift
+        use_dropbox() { false; }
+    elif [[ "${1}" == "--delete-world" ]]; then
         shift
         rm -rf -- "${GAME_VOLUMES}"/world*
         use_dropbox() { false; }
@@ -445,7 +448,7 @@ main() {
         shift
         while_connected docker "$@"
     else
-        echo "Usage...... $0 (up [--delete-world] [--build-spigot] [driver]|proxy|map|admin|rm [--no-preserve])"
+        echo "Usage...... $0 (up [--local|--delete-world] [--build-spigot] [driver]|proxy|map|admin|rm [--no-preserve])"
         echo "Advanced... $0 (ssh [args...]|compose [args...]|docker [args...])"
         exit 1
     fi
